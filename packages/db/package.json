@@ -1,0 +1,14 @@
+{
+  "name": "@ledgerflow/db",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "exports": { ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" } },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "lint": "tsc -p tsconfig.json --noEmit",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": { "kysely": "^0.28.0", "pg": "^8.16.0" },
+  "devDependencies": { "@types/node": "^24.0.0", "@types/pg": "^8.15.0" }
+}

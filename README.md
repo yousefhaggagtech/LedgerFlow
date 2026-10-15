@@ -4,7 +4,7 @@ Financial operations for SMBs, with accounting under the hood.
 
 ![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?logo=typescript&logoColor=white) ![Next.js](https://img.shields.io/badge/Next.js-000000?logo=nextdotjs&logoColor=white) ![Node.js](https://img.shields.io/badge/Node.js-339933?logo=nodedotjs&logoColor=white) ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-4169E1?logo=postgresql&logoColor=white)
 
-> **Design-stage portfolio project.** The repository currently contains product, domain, and architecture documentation. The capabilities and stack below describe the intended system; application code is not implemented yet.
+> **Foundation-stage portfolio project.** The repository contains design documentation, a Turborepo scaffold, and local Docker infrastructure. Business capabilities below remain planned; the scaffold has not yet been runtime-verified.
 
 ## Overview
 
@@ -159,7 +159,7 @@ Accounting has a separate lifecycle: `NOT_POSTED → POSTED → REVERSED`. **`SU
 
 ## Tech stack
 
-Planned technologies from the architecture document; versions are not pinned yet.
+Technologies from the architecture document; workspace dependency ranges are declared in the package manifests. The initial install will generate the lockfile.
 
 | Area          | Technology                   | Purpose                                                                      |
 | ------------- | ---------------------------- | ---------------------------------------------------------------------------- |
@@ -174,7 +174,7 @@ RabbitMQ and Redis are documented implementation choices; domain behavior depend
 
 ## Project structure
 
-**Planned `src/` layout from the architecture document. This tree does not exist yet.**
+**Backend layout under `apps/api/src/`, scaffolded from the architecture document.** Top-level workspaces are `apps/web`, `apps/api`, `packages/db`, and `packages/shared`. Feature directories are placeholders; shared cross-workspace primitives will live in `packages/shared`.
 
 ```text
 src/
@@ -196,28 +196,32 @@ src/
 
 ## Getting started
 
-**The application cannot be run yet.** There is no `package.json`, lockfile, environment template, migration tooling, runtime entrypoint, or test suite in this checkout. The steps below are setup TODOs, not executable instructions.
+Task 0.1 supplies workspace manifests, strict TypeScript configuration, API/web entrypoints, and Docker Compose. See [local development](docs/04-local-development.md) for complete initialization commands, configuration notes, and manual acceptance checks. Installation and verification have not been executed.
 
-### Prerequisites (planned)
+### Prerequisites
 
-- Node.js and a package manager — **TODO:** select and pin supported versions and package manager.
-- PostgreSQL, RabbitMQ, Redis, and S3-compatible storage — **TODO:** define supported versions and local provisioning.
-- Sandbox bank access and email/LLM integration configuration — **TODO:** choose providers and document local substitutes and required credentials.
+- Node.js 24.x and npm 11.x (package manager recorded as npm 11.6.2).
+- Docker Desktop/Engine with Linux containers and Docker Compose v2+.
+- S3-compatible storage and external providers remain deferred.
 
 ### Setup and execution
 
-| Step                    | Current instruction                                                                                                                                                          |
-| ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Install dependencies    | **TODO:** add package manifests and lockfile, then document the actual install command.                                                                                      |
-| Environment setup       | **TODO:** add an environment template and startup validation; document exact variable names for database, queue, cache, storage, authentication, and provider configuration. |
-| Local services          | **TODO:** add provisioning instructions and actual startup commands for required infrastructure.                                                                             |
-| Migrations              | **TODO:** select migration tooling, create the schema/migrations, and document the actual migration command.                                                                 |
-| Run API                 | **TODO:** add the API entrypoint and document its actual run command.                                                                                                        |
-| Run worker              | **TODO:** add the worker entrypoint and document its actual run command.                                                                                                     |
-| Run web                 | **TODO:** add the web application and document its actual run command.                                                                                                       |
-| Run tests               | **TODO:** add test tooling and suites, then document the actual test commands.                                                                                               |
-| Lint, type-check, build | **TODO:** add quality-gate scripts and document their actual commands.                                                                                                       |
+Run from the repository root after installing the prerequisites:
 
+```powershell
+npm install
+if (!(Test-Path .env)) { Copy-Item .env.example .env }
+docker compose up -d --wait
+npm run dev
+```
+
+Web: http://localhost:3000 (blank scaffold). API: http://localhost:4000/health.
+Stop dev with Ctrl+C, then run `npm run lint`, `npm run typecheck`, and
+`npm run build`. The lint pipeline currently uses TypeScript diagnostics;
+no separate style linter or test suite is installed. The first install creates
+`package-lock.json`; review and commit it for reproducible `npm ci` installs.
+Worker execution, schema/migrations, authentication, storage, and external
+providers are deferred.
 The planned verification strategy covers domain unit tests, real-database integration tests for constraints and concurrency, provider contract tests, and end-to-end financial workflows. Retry duplication, overpayment races, tenant leakage, self-approval, and posting recovery are explicit test targets.
 
 ## Documentation
@@ -253,9 +257,9 @@ Implementation remains ahead; no delivery dates or completed feature milestones 
 
 ## Status
 
-**Current state: documented design, no application implementation.**
+**Current state: documented design with an unverified monorepo and infrastructure scaffold.**
 
-Present in the repository: the three design documents, engineering instructions, ignore configuration, and an MIT license. No frontend, API, workers, database schema/migrations, infrastructure configuration, automated tests, or runnable package scripts are present.
+Present in the repository: design documents, engineering instructions, ignore configuration, MIT license, four npm workspaces, Turbo pipelines, strict TypeScript configs, minimal Next.js/Express entrypoints, a Kysely client factory, and Docker Compose. Business functionality, worker execution, schemas/migrations, Money, and automated tests are deferred.
 
 The engineering mechanisms described here still require implementation and verification. There is no running demo or measured performance/coverage claim in this README.
 

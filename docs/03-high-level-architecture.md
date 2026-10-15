@@ -78,6 +78,14 @@ flowchart LR
 
 ### 1.5 Module Structure and Dependency Rules
 
+Task 0.1 physical layout: this backend `src/` tree lives under `apps/api/src`.
+`apps/web` hosts Next.js; `packages/db` supplies the shared Kysely/PostgreSQL
+connection factory; `packages/shared` is reserved for framework-independent
+types and primitives (Money implementation is deferred). Backend-specific
+shared policies remain in `apps/api/src/shared`. API and future worker
+entrypoints live in `apps/api`, sharing the same modules; no separate worker
+workspace is introduced.
+
 Modules: Organization & IAM · Accounting · Expenses · Vendors & Vendor Bills · Customers & Invoicing · Payments · Transfers · Bank Reconciliation · Reporting · Audit · Documents · AI.
 
 ```text
