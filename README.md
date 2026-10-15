@@ -21,31 +21,37 @@ The portfolio focus is financial correctness across retries, concurrent requests
 All features in this section are **planned v1 scope**.
 
 **Workflows**
+
 - Paid expenses; vendor bills and customer invoices with line items.
 - Partial vendor and customer payments, with overpayments blocked.
 - Internal account transfers and asynchronous bank-provider execution.
 - Gap-free invoice numbering per organization and numbering scope; delivery retries independent of issuance.
 
 **Accounting core**
+
 - Double-entry journal, chart of accounts, and organization-specific ledger mappings.
 - Open/closed accounting periods; immutable posted records corrected by explicit reversals.
 - Ledger-backed P&L, cash movement, receivables, payables, and expense/revenue breakdowns.
 
 **Banking and reconciliation**
+
 - Signed webhook intake, stale-transfer status checks, and idempotent bank-feed import.
 - Deterministic auto-matching; suggested matches require human confirmation.
 - Statement reconciliation sessions and audited unmatch/rematch history.
 
 **Controls**
+
 - Organization memberships and capability-based access checks.
 - Maker-checker approval for large transfers and large Bank/Cash-impact reversals.
 - Append-only audit history and explicit correction dependency ordering.
 
 **Documents**
+
 - Receipts, bill attachments, invoice PDFs, contracts, policies, procedures, and statements.
 - Authorized object-storage access, immutable metadata, and malware scanning before serving content.
 
 **AI assistant**
+
 - Financial explanations, summaries, category suggestions, and draft assistance.
 - Deterministic tools for financial numbers; permission-filtered document retrieval for context.
 - Advisory outputs only, subject to normal authorization, validation, and approval rules.
@@ -54,19 +60,19 @@ All features in this section are **planned v1 scope**.
 
 These are documented design mechanisms, not claims of completed implementation.
 
-| Problem | Planned approach |
-|---|---|
-| Double-entry ledger | Use exact decimal money, enforce balanced journals, and commit business state, journal lines, audit, and outbox records atomically. Unique source/posting identities prevent duplicate postings. |
-| Immutable history | Freeze material fields after posting. Corrections create linked offsetting entries in the current open period; active dependent payments must be reversed explicitly first. |
-| Multi-tenancy | Scope repositories by organization, authorize active memberships and capabilities, and use tenant-aware foreign keys, including actor references. PostgreSQL RLS is optional defense in depth. |
-| Idempotency | Persist command identity and response snapshots; reject key reuse with a different request. Stable provider keys and unique event/posting constraints protect separate retry boundaries. |
-| Transactional outbox | Commit durable work alongside local state. Workers claim short-lived leases, process at least once with idempotent consumers, and dead-letter exhausted retries for review. |
-| Webhook security | Verify raw-body HMAC signatures with constant-time comparison, check timestamps, and deduplicate provider event IDs before side effects. Normalize outcomes through the same transition guard used by polling. |
-| Reconciliation | Keep imported bank observations separate from accounting recognition. Strong provider identities permit auto-matching; other suggestions need confirmation, with one active match per transaction and target. |
-| Maker-checker approvals | Bind approval to a specific intent hash/version and require a different approving member. Material changes invalidate approval; execution checks the approved version. |
-| Concurrency control | Lock bill/invoice parents before final payments, serialize invoice-number allocation, coordinate posting with period closure, and use partial unique constraints for active matches and pending approvals. |
-| Uncertain bank outcomes | A timeout becomes `PENDING_CONFIRMATION`, not failure. Reconciliation resolves execution; confirmed bank success can recover local posting without initiating another transfer. |
-| Advisory AI | Build tenant-scoped, permission-filtered context from deterministic tools. Validate structured outputs; document retrieval supplies context, never authoritative balances or direct ledger writes. |
+| Problem                 | Planned approach                                                                                                                                                                                               |
+| ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Double-entry ledger     | Use exact decimal money, enforce balanced journals, and commit business state, journal lines, audit, and outbox records atomically. Unique source/posting identities prevent duplicate postings.               |
+| Immutable history       | Freeze material fields after posting. Corrections create linked offsetting entries in the current open period; active dependent payments must be reversed explicitly first.                                    |
+| Multi-tenancy           | Scope repositories by organization, authorize active memberships and capabilities, and use tenant-aware foreign keys, including actor references. PostgreSQL RLS is optional defense in depth.                 |
+| Idempotency             | Persist command identity and response snapshots; reject key reuse with a different request. Stable provider keys and unique event/posting constraints protect separate retry boundaries.                       |
+| Transactional outbox    | Commit durable work alongside local state. Workers claim short-lived leases, process at least once with idempotent consumers, and dead-letter exhausted retries for review.                                    |
+| Webhook security        | Verify raw-body HMAC signatures with constant-time comparison, check timestamps, and deduplicate provider event IDs before side effects. Normalize outcomes through the same transition guard used by polling. |
+| Reconciliation          | Keep imported bank observations separate from accounting recognition. Strong provider identities permit auto-matching; other suggestions need confirmation, with one active match per transaction and target.  |
+| Maker-checker approvals | Bind approval to a specific intent hash/version and require a different approving member. Material changes invalidate approval; execution checks the approved version.                                         |
+| Concurrency control     | Lock bill/invoice parents before final payments, serialize invoice-number allocation, coordinate posting with period closure, and use partial unique constraints for active matches and pending approvals.     |
+| Uncertain bank outcomes | A timeout becomes `PENDING_CONFIRMATION`, not failure. Reconciliation resolves execution; confirmed bank success can recover local posting without initiating another transfer.                                |
+| Advisory AI             | Build tenant-scoped, permission-filtered context from deterministic tools. Validate structured outputs; document retrieval supplies context, never authoritative balances or direct ledger writes.             |
 
 ## Architecture
 
@@ -109,17 +115,17 @@ Feature modules own their persistence and collaborate through application interf
 
 `Dr` means debit; `Cr` means credit. These mappings are internal to the accounting engine.
 
-| Workflow | Recognition point | Journal entry |
-|---|---|---|
-| Paid expense | Post expense | Dr Expense / Cr Bank or Cash |
-| Vendor bill | Post bill | Dr Expense per line / Cr Accounts Payable |
-| Vendor payment | Record payment | Dr Accounts Payable / Cr Bank or Cash |
-| Customer invoice | Issue invoice | Dr Accounts Receivable / Cr Revenue per line |
-| Customer payment | Record payment | Dr Bank or Cash / Cr Accounts Receivable |
-| Internal account transfer | Confirmed outcome; provider success required when bank-executed | Dr Destination Account / Cr Source Account |
-| External-beneficiary transfer | Provider-confirmed success required before posting | Accounting treatment deferred |
-| Reversal | Explicit correction in current open period | Offsetting entry linked to original |
-| Bank reconciliation | Import and match | No journal entry from matching alone |
+| Workflow                      | Recognition point                                               | Journal entry                                |
+| ----------------------------- | --------------------------------------------------------------- | -------------------------------------------- |
+| Paid expense                  | Post expense                                                    | Dr Expense / Cr Bank or Cash                 |
+| Vendor bill                   | Post bill                                                       | Dr Expense per line / Cr Accounts Payable    |
+| Vendor payment                | Record payment                                                  | Dr Accounts Payable / Cr Bank or Cash        |
+| Customer invoice              | Issue invoice                                                   | Dr Accounts Receivable / Cr Revenue per line |
+| Customer payment              | Record payment                                                  | Dr Bank or Cash / Cr Accounts Receivable     |
+| Internal account transfer     | Confirmed outcome; provider success required when bank-executed | Dr Destination Account / Cr Source Account   |
+| External-beneficiary transfer | Provider-confirmed success required before posting              | Accounting treatment deferred                |
+| Reversal                      | Explicit correction in current open period                      | Offsetting entry linked to original          |
+| Bank reconciliation           | Import and match                                                | No journal entry from matching alone         |
 
 Payments settle receivables/payables without recognizing revenue/expense again. Drafts have no ledger impact. Each organization uses one base currency in v1.
 
@@ -155,14 +161,14 @@ Accounting has a separate lifecycle: `NOT_POSTED → POSTED → REVERSED`. **`SU
 
 Planned technologies from the architecture document; versions are not pinned yet.
 
-| Area | Technology | Purpose |
-|---|---|---|
-| Web | Next.js, React, TypeScript | Business-facing interface and API interaction |
-| API / workers | Node.js, Express, TypeScript | Use cases, domain policies, integrations, and background processing |
-| Database | PostgreSQL | ACID financial state, decimal amounts, constraints, locks, audit, and outbox |
-| Messaging | RabbitMQ | Durable at-least-once job/event transport |
-| Cache | Redis | Derived, non-authoritative reads |
-| Documents | S3-compatible storage | Binary content with metadata in PostgreSQL |
+| Area          | Technology                   | Purpose                                                                      |
+| ------------- | ---------------------------- | ---------------------------------------------------------------------------- |
+| Web           | Next.js, React, TypeScript   | Business-facing interface and API interaction                                |
+| API / workers | Node.js, Express, TypeScript | Use cases, domain policies, integrations, and background processing          |
+| Database      | PostgreSQL                   | ACID financial state, decimal amounts, constraints, locks, audit, and outbox |
+| Messaging     | RabbitMQ                     | Durable at-least-once job/event transport                                    |
+| Cache         | Redis                        | Derived, non-authoritative reads                                             |
+| Documents     | S3-compatible storage        | Binary content with metadata in PostgreSQL                                   |
 
 RabbitMQ and Redis are documented implementation choices; domain behavior depends on durable delivery and non-authoritative caching, not those specific products. Bank, email, and LLM providers remain behind adapters.
 
@@ -200,17 +206,17 @@ src/
 
 ### Setup and execution
 
-| Step | Current instruction |
-|---|---|
-| Install dependencies | **TODO:** add package manifests and lockfile, then document the actual install command. |
-| Environment setup | **TODO:** add an environment template and startup validation; document exact variable names for database, queue, cache, storage, authentication, and provider configuration. |
-| Local services | **TODO:** add provisioning instructions and actual startup commands for required infrastructure. |
-| Migrations | **TODO:** select migration tooling, create the schema/migrations, and document the actual migration command. |
-| Run API | **TODO:** add the API entrypoint and document its actual run command. |
-| Run worker | **TODO:** add the worker entrypoint and document its actual run command. |
-| Run web | **TODO:** add the web application and document its actual run command. |
-| Run tests | **TODO:** add test tooling and suites, then document the actual test commands. |
-| Lint, type-check, build | **TODO:** add quality-gate scripts and document their actual commands. |
+| Step                    | Current instruction                                                                                                                                                          |
+| ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Install dependencies    | **TODO:** add package manifests and lockfile, then document the actual install command.                                                                                      |
+| Environment setup       | **TODO:** add an environment template and startup validation; document exact variable names for database, queue, cache, storage, authentication, and provider configuration. |
+| Local services          | **TODO:** add provisioning instructions and actual startup commands for required infrastructure.                                                                             |
+| Migrations              | **TODO:** select migration tooling, create the schema/migrations, and document the actual migration command.                                                                 |
+| Run API                 | **TODO:** add the API entrypoint and document its actual run command.                                                                                                        |
+| Run worker              | **TODO:** add the worker entrypoint and document its actual run command.                                                                                                     |
+| Run web                 | **TODO:** add the web application and document its actual run command.                                                                                                       |
+| Run tests               | **TODO:** add test tooling and suites, then document the actual test commands.                                                                                               |
+| Lint, type-check, build | **TODO:** add quality-gate scripts and document their actual commands.                                                                                                       |
 
 The planned verification strategy covers domain unit tests, real-database integration tests for constraints and concurrency, provider contract tests, and end-to-end financial workflows. Retry duplication, overpayment races, tenant leakage, self-approval, and posting recovery are explicit test targets.
 
@@ -255,5 +261,5 @@ The engineering mechanisms described here still require implementation and verif
 
 ## License and author
 
-- License: [MIT](LICENSE). **TODO:** confirm licensing details before release.
-- Author: **TODO: preferred display name and portfolio/profile link.** The existing license credits yousef haggag.
+- License: [MIT](LICENSE).
+- Author: Yousef Haggag (https://github.com/yousefhaggag)
