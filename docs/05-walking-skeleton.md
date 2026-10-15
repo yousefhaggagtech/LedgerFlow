@@ -28,7 +28,9 @@ docker compose up -d --wait
 npm run dev
 ```
 
-Open http://localhost:3000. Expect green `API: UP` and `DB: UP`.
+Open http://localhost:3000. Expect `API: UP` and `DB: UP` in the system status
+card within the app shell. Task 0.3 uses neutral status badges; green, red,
+and amber are reserved for financial states. See [design tokens](design-tokens.md).
 The page refreshes every five seconds without a full browser reload; requests
 are uncached. Allow additional time for connection/query timeouts during an
 outage. The initial page has a loading state.
@@ -47,8 +49,8 @@ Before stopping PostgreSQL, expect HTTP 200:
 { "api": "UP", "database": "UP" }
 ```
 
-After stopping PostgreSQL, expect HTTP 503 and red `DB: DOWN` on the page,
-while `API: UP` remains green:
+After stopping PostgreSQL, expect HTTP 503 and `DB: DOWN` on the page,
+while `API: UP` remains visible:
 
 ```json
 { "api": "UP", "database": "DOWN", "error": "Database is unavailable." }

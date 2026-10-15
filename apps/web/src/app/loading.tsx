@@ -1,3 +1,3 @@
 export default function Loading() {
-  return <main className="p-8" role="status">Checking system status…</main>;
+  return <div className="rounded-xl border bg-card p-6 text-muted-foreground" role="status">Checking system status…</div>;
 }

@@ -4,7 +4,7 @@ Financial operations for SMBs, with accounting under the hood.
 
 ![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?logo=typescript&logoColor=white) ![Next.js](https://img.shields.io/badge/Next.js-000000?logo=nextdotjs&logoColor=white) ![Node.js](https://img.shields.io/badge/Node.js-339933?logo=nodedotjs&logoColor=white) ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-4169E1?logo=postgresql&logoColor=white)
 
-> **Foundation-stage portfolio project.** The repository contains design documentation, a Turborepo scaffold, and local Docker infrastructure. Business capabilities below remain planned; the scaffold has not yet been runtime-verified.
+> **Foundation-stage portfolio project.** The repository contains design documentation, a Turborepo scaffold, local Docker infrastructure, and a responsive UI foundation. Business capabilities below remain planned. See the [design tokens and app shell](docs/design-tokens.md) for implemented UI decisions and verification.
 
 ## Overview
 
@@ -164,6 +164,7 @@ Technologies from the architecture document; workspace dependency ranges are dec
 | Area          | Technology                   | Purpose                                                                      |
 | ------------- | ---------------------------- | ---------------------------------------------------------------------------- |
 | Web           | Next.js, React, TypeScript   | Business-facing interface and API interaction                                |
+| UI foundation | Tailwind CSS 4, shadcn/ui, Inter | Tokenized components and responsive app shell                            |
 | API / workers | Node.js, Express, TypeScript | Use cases, domain policies, integrations, and background processing          |
 | Database      | PostgreSQL                   | ACID financial state, decimal amounts, constraints, locks, audit, and outbox |
 | Messaging     | RabbitMQ                     | Durable at-least-once job/event transport                                    |

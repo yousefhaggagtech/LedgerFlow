@@ -126,8 +126,10 @@ docker compose stop
 - Shared workspace packages export compiled ESM and declarations; Turbo
   builds upstream packages before consumers. Domain code must not import DB
   or transport dependencies.
-- The main page displays system connectivity. There are no business UI components, authentication, financial
-  logic, or Money implementation.
+- The main page displays a workspace preview and system connectivity inside
+  the responsive app shell. Shared UI components and their usage rules are
+  documented in [design tokens](design-tokens.md). Authentication, business
+  features, financial logic, and Money implementation are deferred.
 
 ## Verification status
 

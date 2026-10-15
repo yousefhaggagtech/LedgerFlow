@@ -1,1 +1,149 @@
 @import "tailwindcss";
+
+/* Semantic roles can be overridden by a future theme without changing components. */
+:root {
+  color-scheme: light;
+  --background: #f8fafc;
+  --foreground: #0f172a;
+  --card: #ffffff;
+  --card-foreground: #0f172a;
+  --popover: #ffffff;
+  --popover-foreground: #0f172a;
+  --primary: #4f46e5;
+  --primary-hover: #4338ca;
+  --primary-foreground: #ffffff;
+  --secondary: #f1f5f9;
+  --secondary-foreground: #334155;
+  --muted: #f1f5f9;
+  --muted-foreground: #64748b;
+  --accent: #eef2ff;
+  --accent-foreground: #4338ca;
+  /* Destructive controls use neutral emphasis; red is reserved for financial status. */
+  --destructive: #0f172a;
+  --destructive-foreground: #ffffff;
+  --border: #e2e8f0;
+  --input: #cbd5e1;
+  --ring: #4f46e5;
+  --overlay: rgb(15 23 42 / 35%);
+  --sidebar: #ffffff;
+  --sidebar-foreground: #475569;
+  --sidebar-accent: #eef2ff;
+  --sidebar-accent-foreground: #4338ca;
+  --sidebar-border: #e2e8f0;
+  --sidebar-ring: #4f46e5;
+  --status-paid: #166534;
+  --status-paid-surface: #f0fdf4;
+  --status-overdue: #b91c1c;
+  --status-overdue-surface: #fef2f2;
+  --status-pending: #92400e;
+  --status-pending-surface: #fffbeb;
+  --radius: 0.5rem;
+  --space-unit: 0.25rem;
+  --sidebar-expanded: 15rem;
+  --sidebar-collapsed: 4rem;
+  --navbar-height: 4.5rem;
+  --nav-item-height: 2.75rem;
+  --nav-indicator-width: 0.125rem;
+  --content-width: 80rem;
+  --profile-menu-width: 15rem;
+  --menu-min-width: 8rem;
+  --table-row-height: 2.25rem;
+  --table-cell-x: 0.75rem;
+  --table-cell-y: 0.5rem;
+  --surface-shadow-xs: 0 1px 2px rgb(15 23 42 / 3%);
+  --surface-shadow-sm: 0 1px 3px rgb(15 23 42 / 5%);
+  --surface-shadow-md: 0 4px 12px rgb(15 23 42 / 8%);
+  --surface-shadow-lg: 0 8px 24px rgb(15 23 42 / 10%);
+}
+
+@theme inline {
+  --color-*: initial;
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-hover: var(--primary-hover);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-overlay: var(--overlay);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+  --color-status-paid: var(--status-paid);
+  --color-status-paid-surface: var(--status-paid-surface);
+  --color-status-overdue: var(--status-overdue);
+  --color-status-overdue-surface: var(--status-overdue-surface);
+  --color-status-pending: var(--status-pending);
+  --color-status-pending-surface: var(--status-pending-surface);
+  --font-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
+  --spacing: var(--space-unit);
+  --spacing-sidebar-expanded: var(--sidebar-expanded);
+  --spacing-sidebar-collapsed: var(--sidebar-collapsed);
+  --spacing-navbar: var(--navbar-height);
+  --spacing-nav-item: var(--nav-item-height);
+  --spacing-nav-indicator: var(--nav-indicator-width);
+  --spacing-content: var(--content-width);
+  --spacing-profile-menu: var(--profile-menu-width);
+  --spacing-menu-min: var(--menu-min-width);
+  --spacing-table-row: var(--table-row-height);
+  --spacing-table-cell-x: var(--table-cell-x);
+  --spacing-table-cell-y: var(--table-cell-y);
+  --radius-xs: calc(var(--radius) / 2);
+  --radius-sm: calc(var(--radius) * 0.75);
+  --radius-md: var(--radius);
+  --radius-lg: calc(var(--radius) * 1.5);
+  --radius-xl: calc(var(--radius) * 2);
+  --shadow-xs: var(--surface-shadow-xs);
+  --shadow-sm: var(--surface-shadow-sm);
+  --shadow-md: var(--surface-shadow-md);
+  --shadow-lg: var(--surface-shadow-lg);
+}
+
+@theme static {
+  --breakpoint-sm: 40rem;
+  --breakpoint-md: 48rem;
+  --breakpoint-lg: 64rem;
+  --breakpoint-xl: 80rem;
+  --breakpoint-2xl: 96rem;
+  --text-xs: 0.75rem;
+  --text-xs--line-height: 1rem;
+  --text-sm: 0.875rem;
+  --text-sm--line-height: 1.25rem;
+  --text-base: 1rem;
+  --text-base--line-height: 1.5rem;
+  --text-lg: 1.125rem;
+  --text-lg--line-height: 1.75rem;
+  --text-xl: 1.25rem;
+  --text-xl--line-height: 1.75rem;
+  --text-2xl: 1.5rem;
+  --text-2xl--line-height: 2rem;
+  --text-3xl: 1.875rem;
+  --text-3xl--line-height: 2.25rem;
+}
+
+@layer base {
+  * { @apply border-border; }
+  body { @apply bg-background font-sans text-sm text-foreground antialiased; }
+  :focus-visible { @apply outline-2 outline-offset-2 outline-ring; }
+}
+
+/* Shared by financial figures; Tailwind's built-in name is deliberately retained. */
+@utility tabular-nums {
+  font-variant-numeric: tabular-nums;
+}
