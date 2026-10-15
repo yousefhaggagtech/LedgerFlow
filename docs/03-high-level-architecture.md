@@ -224,6 +224,12 @@ flowchart TB
 
 ## 3. Level 2: Container Diagram
 
+Task 0.2 walking skeleton: the Next.js status page calls the API's `/health`
+server-side using `API_URL`; the API executes a table-free `SELECT 1` through
+`packages/db`. HTTP 200 indicates database connectivity; HTTP 503 reports a
+database outage with a generic error. Browser refreshes request fresh status
+every five seconds. This diagnostic query accesses no tenant records.
+
 ### Decomposition
 
 | Container | Description |

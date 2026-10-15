@@ -1,4 +1,7 @@
 import express from "express";
+import { checkDatabaseConnection, createDatabaseFromEnvironment } from "@ledgerflow/db";
+import type { HealthResponse } from "@ledgerflow/shared";
+import { getHealth } from "./infrastructure/health.ts";
 
 const portValue = process.env.API_PORT;
 const host = process.env.API_HOST;
@@ -14,9 +17,12 @@ if (!host?.trim()) {
 }
 
 const app = express();
+const db = createDatabaseFromEnvironment<Record<string, never>>();
 app.disable("x-powered-by");
-app.get("/health", (_request, response) => {
-  response.json({ status: "ok" });
+app.get("/health", async (_request, response: express.Response<HealthResponse>) => {
+  const health = await getHealth(() => checkDatabaseConnection(db));
+  response.set("Cache-Control", "no-store");
+  response.status(health.database === "UP" ? 200 : 503).json(health);
 });
 
 const server = app.listen(port, host);
@@ -29,11 +35,18 @@ const SHUTDOWN_TIMEOUT_MS = 10_000;
 function shutdown(): void {
   const timeout = setTimeout(() => process.exit(1), SHUTDOWN_TIMEOUT_MS);
   timeout.unref();
-  server.close((error) => {
-    clearTimeout(timeout);
+  server.close(async (error) => {
     if (error) {
       process.stderr.write("API server could not shut down cleanly.\n");
       process.exitCode = 1;
+    }
+    try {
+      await db.destroy();
+    } catch {
+      process.stderr.write("Database pool could not shut down cleanly.\n");
+      process.exitCode = 1;
+    } finally {
+      clearTimeout(timeout);
     }
   });
 }

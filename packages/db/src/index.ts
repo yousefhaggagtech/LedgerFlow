@@ -1,9 +1,20 @@
-import { Kysely, PostgresDialect } from "kysely";
+import { Kysely, PostgresDialect, sql } from "kysely";
 import pg from "pg";
 
 const POOL_MAX_CONNECTIONS = 10;
 const CONNECTION_TIMEOUT_MS = 5_000;
 const IDLE_TIMEOUT_MS = 30_000;
+const QUERY_TIMEOUT_MS = 3_000;
+
+export function createDatabaseFromEnvironment<Database>(): Kysely<Database> {
+  const connectionString = process.env.DATABASE_URL;
+  if (!connectionString) throw new Error("DATABASE_URL is required.");
+  return createDatabase<Database>(connectionString);
+}
+
+export async function checkDatabaseConnection<Database>(db: Kysely<Database>): Promise<void> {
+  await sql`SELECT 1`.execute(db);
+}
 
 // Call once per process; the owner must await db.destroy() during shutdown.
 // Consumers supply their schema types when schemas are introduced.
@@ -21,6 +32,8 @@ export function createDatabase<Database>(connectionString: string): Kysely<Datab
     connectionString,
     max: POOL_MAX_CONNECTIONS,
     connectionTimeoutMillis: CONNECTION_TIMEOUT_MS,
+    query_timeout: QUERY_TIMEOUT_MS,
+    statement_timeout: QUERY_TIMEOUT_MS,
     idleTimeoutMillis: IDLE_TIMEOUT_MS
   });
   // Idle connections can fail outside a query; never print connection details.

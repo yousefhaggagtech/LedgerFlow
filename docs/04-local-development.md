@@ -56,16 +56,17 @@ npm run dev
 ```
 
 `npm run dev` builds dependency packages before starting Next.js and the API
-as parallel persistent tasks. Visit http://localhost:3000 (intentionally blank)
-and http://localhost:4000/health (`{"status":"ok"}`). The health endpoint only
-checks that the HTTP process responds; it does not probe infrastructure.
+as parallel persistent tasks. Visit http://localhost:3000 for System Status
+and http://localhost:4000/health for API/database JSON status. The health
+endpoint executes `SELECT 1` through Kysely. See [Task 0.2](05-walking-skeleton.md)
+for configuration and outage/recovery checks.
 RabbitMQ management is at http://localhost:15672 using the credentials in `.env`.
 
 The API uses Node's built-in TypeScript stripping and watch mode; no runtime
 TypeScript runner is needed. Its scripts explicitly load the root `.env`.
-Next.js needs no service connection variables yet. Redis and RabbitMQ clients
-and the worker entrypoint are deferred. The API does not open a database
-connection until future modules explicitly create one.
+Next.js loads the root `.env` and uses server-only `API_URL`. Redis and RabbitMQ
+clients and the worker entrypoint are deferred. The API creates a database
+pool at startup and connects on health requests.
 
 ## Manual acceptance checks
 
@@ -79,7 +80,7 @@ docker compose exec redis redis-cli ping
 docker compose exec rabbitmq rabbitmq-diagnostics -q ping
 ```
 
-Expect `status: ok`, HTTP 200, PostgreSQL accepting connections, Redis `PONG`,
+Expect `api: UP`, `database: UP`, HTTP 200, PostgreSQL accepting connections, Redis `PONG`,
 and a successful RabbitMQ ping. All three services should show healthy in
 `docker compose ps`.
 
@@ -95,8 +96,9 @@ npm run start --workspace=@ledgerflow/web
 ```
 
 `lint` currently runs TypeScript diagnostics, including Next.js route type
-generation, rather than a separate style linter. There is no test suite yet:
-no business behavior is implemented. Next.js generates ignored `next-env.d.ts`
+generation, rather than a separate style linter. API health mapping tests run
+with `npm run test --workspace=@ledgerflow/api` after building dependencies.
+Next.js generates ignored `next-env.d.ts`
 and `.next` types automatically. Rebuild shared packages after editing them;
 they have no watch tasks at this stage.
 
@@ -118,17 +120,18 @@ docker compose stop
   infrastructure, not a production deployment or backup strategy.
 - `createDatabase<Database>(url)` validates the URL and creates a bounded,
   lazy connection pool. Call once per process and await `db.destroy()` on
-  shutdown. No tables, schema types, migrations, queries, or tenant data exist.
+  shutdown. No tables, schema types, migrations, or tenant data exist; only
+  the `SELECT 1` connectivity query is implemented.
   Tenant-scoped repositories and authorization must precede business queries.
 - Shared workspace packages export compiled ESM and declarations; Turbo
   builds upstream packages before consumers. Domain code must not import DB
   or transport dependencies.
-- The blank route and root layout are only the App Router's required
-  scaffold. There are no business UI components, authentication, financial
+- The main page displays system connectivity. There are no business UI components, authentication, financial
   logic, or Money implementation.
 
 ## Verification status
 
 Installation, lint, type-check, build, Docker startup, and runtime smoke tests
 were deliberately not executed, per the environment instruction for Task 0.1.
-No lockfile was generated. Acceptance remains pending the manual checks above.
+A lockfile was subsequently supplied and committed. Acceptance remains pending
+the manual checks above; no successful runtime verification is claimed.

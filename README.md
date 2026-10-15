@@ -215,10 +215,14 @@ docker compose up -d --wait
 npm run dev
 ```
 
-Web: http://localhost:3000 (blank scaffold). API: http://localhost:4000/health.
+Web: http://localhost:3000 (System Status). API: http://localhost:4000/health.
+Add server-only `API_URL` from `.env.example` to an existing root `.env`.
+The page refreshes every five seconds and reports real database connectivity.
+See [walking skeleton checks](docs/05-walking-skeleton.md) for outage/recovery tests.
 Stop dev with Ctrl+C, then run `npm run lint`, `npm run typecheck`, and
 `npm run build`. The lint pipeline currently uses TypeScript diagnostics;
-no separate style linter or test suite is installed. The first install creates
+no separate style linter is installed. Health mapping tests run with
+`npm run test --workspace=@ledgerflow/api` after building. The first install creates
 `package-lock.json`; review and commit it for reproducible `npm ci` installs.
 Worker execution, schema/migrations, authentication, storage, and external
 providers are deferred.
