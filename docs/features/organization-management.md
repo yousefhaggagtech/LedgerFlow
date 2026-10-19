@@ -8,14 +8,14 @@ Allow an authenticated new user to create an organization, establish their membe
 
 This feature belongs to the Identity & Organization context. It covers organization creation, viewing organization settings and members, adding a member, and changing a member's role. Account registration/authentication supplies the authenticated User; it is not implemented by this feature. Organization deletion, member removal, lifecycle administration, and financial configuration workflows are not specified here.
 
-The six sections below use the task's Feature Document Template. Requirements explicitly supplied by the task, including unique memberships and retaining an Owner, supplement docs 01–03. Proposed transport details do not settle the unresolved domain decisions in §4.
+The six sections below use the task's Feature Document Template. Requirements explicitly supplied by the task, including unique memberships and retaining an Owner, supplement docs 01–03. The confirmed Task 1.3 contract in §4 supersedes the earlier conceptual proposals.
 
 ### User Stories
 
 | Actor                                    | Story                                                                                                              | Acceptance behavior                                                                                                                                                                                                                                          |
 | ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | Authenticated new user                   | As a new user, I want to create my organization so that my business has its own workspace.                         | Submit a name, base currency, and accounting timezone. Success creates the organization and the creator's active Owner membership atomically. Failure leaves neither partially created.                                                                      |
-| Owner/Admin with the required capability | As an Owner/Admin, I want to add a member so that a teammate can work in my organization.                          | Identify the intended user, choose an allowed role, and submit. The server checks authorization and membership uniqueness within this organization before persisting the membership. The invitation/activation mechanism remains an explicit decision in §4. |
+| Owner/Admin with the required capability | As an Owner/Admin, I want to add a member so that a teammate can work in my organization.                          | Identify an existing active User by UUID and choose an allowed role. The server checks authorization and uniqueness within this organization, then directly creates an ACTIVE membership. |
 | Owner/Admin with the required capability | As an Owner/Admin, I want to assign or change a member's role so that their access matches their responsibilities. | Change only a membership in the current organization. Validate the requested role and grant authority; preserve at least one active Owner. The user's memberships in other organizations remain unchanged.                                                   |
 
 ### Business Value
@@ -32,7 +32,7 @@ SMBs keep sensitive customer, vendor, payment, and financial information in thei
 | `User`                                  | `id`                                                                              | Authenticated human identity. A User is not itself tenant-owned and has no organization-wide authority without the relevant membership. Docs 01–03 do not define email, display name, credentials, or identity lookup. |
 | `Membership` / `OrganizationMembership` | `userId`, `organizationId`, `role`, `status`                                      | Connects exactly one User to exactly one Organization and determines participation and permissions there. Both names refer to the same domain concept, not separate entities.                                          |
 
-Relationships: a User may belong to multiple Organizations; an Organization has multiple Memberships; User ↔ Organization is many-to-many through Membership. A role belongs to a Membership, never globally to a User. The roles are Owner, Admin, Accountant, Finance Member, and Viewer. `OWNER` below denotes the Owner role, not an already agreed wire/storage enum.
+Relationships: a User may belong to multiple Organizations; an Organization has multiple Memberships; User ↔ Organization is many-to-many through Membership. A role belongs to a Membership, never globally to a User. The roles are Owner, Admin, Accountant, Finance Member, and Viewer; the confirmed storage/wire values are listed in §4.
 
 Every actor reference in tenant-owned business records identifies a membership in that same organization. Membership reference identity must be stable for audit and historical records; its physical key design belongs to database design.
 
@@ -50,7 +50,7 @@ Every actor reference in tenant-owned business records identifies a membership i
 8. **Single base currency and explicit timezone.** Organization creation requires valid configuration for v1's single-currency semantics and accounting date derivation. Do not infer the accounting timezone from the server's local timezone. Post-creation currency/timezone changes require a separate policy.
 9. **Auditable management changes.** Successful creation, member addition, and role changes produce append-only, tenant-scoped audit history with the authenticated actor, target, timestamp, correlation information, and necessary before/after metadata. Failed writes leave no successful-change audit record. Do not record credentials, tokens, or full request payloads.
 
-Organization/membership status enums and transitions are not supplied by docs 01–03. “Active” expresses the existing access prerequisite; it does not introduce invitation or suspension states.
+Organization status is `ACTIVE`/`SUSPENDED`; membership and user status is `ACTIVE`/`INACTIVE`. This API creates active organizations/memberships and exposes no status-transition endpoint. Status administration remains deferred.
 
 ### Use-Case Behavior
 
@@ -75,29 +75,109 @@ User roles such as Owner/Admin are authorization groupings; system ledger roles 
 
 ## 4. Technical Specification
 
-### API Contract — Initial Proposal
+### Task 1.1 — Confirmed Persistence Decisions
 
-These endpoints describe the minimum transport surface for the requested flows. They are proposals, not existing routes. Paths use `:id` as the Organization identifier. JSON uses the domain's `organizationId` spelling; `organization_id` denotes the equivalent persistence tenant key, not a second field. Identifiers are opaque and validated at the boundary.
+Task 1.1 confirms Direct Add (no invitations), Owner-only promotion,
+organization status `ACTIVE`/`SUSPENDED`, user and membership status
+`ACTIVE`/`INACTIVE`, and role storage values `OWNER`, `ADMIN`, `ACCOUNTANT`,
+`FINANCE_MEMBER`, `VIEWER`. UUID primary keys use PostgreSQL
+`DEFAULT gen_random_uuid()`. Users have unique email, password hash, and full
+name; all three tables have creation/update timestamps. These decisions
+supersede the earlier conceptual status and invitation questions.
+
+The [database contract and verification guide](../database.md) documents the
+implemented schema, tenant-aware membership reference key, migrations, and
+development seed. Task 1.3 adds creation idempotency, authorization, audited
+commands, and concurrency-safe Owner retention as described below.
+
+### Task 1.3 — Confirmed Implementation Contract
+
+- **Authority (Option A):** Owners may assign all five roles and edit any member,
+  including themselves, subject to active-Owner retention. Admins may add/edit
+  only ACCOUNTANT, FINANCE_MEMBER, and VIEWER memberships. Both the target's current
+  role and requested role must be in that set; Admins cannot edit themselves,
+  other Admins, or Owners, including unchanged-role requests.
+- **Capabilities:** authenticated active users have `org:create`. Active Owner/Admin
+  memberships have `org:read`, `member:read`, `member:invite`, and `member:edit`.
+  Other roles receive none of these tenant management capabilities in this task.
+- **Direct Add:** `{ userId, role }` identifies an existing active global User by
+  UUID; successful additions are immediately ACTIVE. There is no invitation,
+  email lookup, account creation, or unrestricted user directory. Duplicate
+  membership is `409` across every status. Absent/inactive target Users return the
+  same `404` only after tenant authorization.
+- **Validation:** reject unknown body/query fields and server-controlled fields.
+  Accept UUID identifiers (case-insensitive, normalized to lowercase), names of
+  1–200 UTF-16 code units after trimming (no NUL), uppercase currencies from
+  Node's `Intl.supportedValuesOf("currency")`, and explicit named timezones accepted
+  by `Intl.DateTimeFormat`, including UTC (maximum 100 characters; numeric offsets
+  are rejected). Only the five exact uppercase role values are accepted.
+- **Pagination:** `limit` defaults to 25 and is bounded to 1–100. Keyset order is
+  ascending `userId` using the existing `(organization_id, user_id)` unique index.
+  `nextCursor` is an opaque base64url encoding of organization UUID and last user
+  UUID, bound to the selected tenant. Empty/end pages return `nextCursor: null`.
+  List DTOs contain only `userId`, `organizationId`, `role`, and `status`.
+- **Creation retry identity:** require a 1–128 character `Idempotency-Key` containing
+  letters, digits, `.`, `_`, `:`, or `-`. Scope it to authenticated User plus
+  `organization:create`; hash the normalized validated fields in fixed order.
+  Same-key/same-payload retries return the original `201` snapshot; changed payloads
+  return `409`. An active membership is checked again before replay. Keys expire
+  after 24 hours; retained expired keys return `409` and cannot create a second
+  organization. Inspect the existing organization before deliberately starting
+  a new creation with a new key. No automatic cleanup/key reuse is introduced.
+- **Transactions and concurrency:** the service owns Kysely READ COMMITTED
+  transactions. Creation locks the global creator User row before retry lookup,
+  then commits Organization, Owner, audit, and completed idempotency record together.
+  There is no committed IN_PROGRESS record or external work inside a transaction.
+  Member mutations serialize with `FOR UPDATE` on the organization root; reads
+  use `FOR SHARE`. Visibility is checked before root lookup and capabilities are
+  rechecked after acquiring the lock. Last-Owner validation and role update occur
+  under the same lock/transaction; inactive Owners do not count. Future status,
+  removal, or membership writers must follow this same locking protocol.
+- **Audit:** additive migration `003_organization_management` creates `audit_events`
+  and `idempotency_records`, without rewriting old migrations or identity/session
+  data. Audit actions are ORGANIZATION_CREATED, MEMBER_ADDED, MEMBER_ROLE_CHANGED.
+  Human actor references use `(organization_id, membership_id, user_id)` to prevent
+  both cross-tenant and wrong-user attribution. Audit includes target, timestamp,
+  correlation UUID, and minimal before/after DTOs; no credentials or full request
+  payloads. PostgreSQL rejects audit UPDATE, DELETE, and TRUNCATE. Replayed creation,
+  failed requests, and unchanged roles create no new successful-change audit event.
+- **Transport:** errors preserve the shared `{ error: string }` envelope and use
+  server-generated `X-Request-Id` for correlation on organization routes (also
+  stored on audit events). CORS permits credentialed PATCH and Idempotency-Key
+  from WEB_ORIGIN and exposes X-Request-Id; existing JSON/Origin/CSRF checks apply.
+  Generic infrastructure errors remain `503`; detected deadlock/serialization
+  conflicts are `409`. Status values are returned as stored; this feature adds
+  no organization suspension/activation policy or lifecycle administration.
+
+`idempotency_records` currently serves organization creation. Membership addition
+uses uniqueness (duplicates are conflicts); repeated unchanged role assignments
+are no-ops. Before wiring future tenant commands, define their tenant-aware command
+identity and retention/recovery semantics; this task does not claim financial
+command idempotency or lease recovery is implemented.
+
+### API Contract
+
+These endpoints are implemented in `apps/api/src/modules/organizations`. Paths use `:id` as the Organization identifier. JSON uses the domain's `organizationId` spelling; `organization_id` denotes the equivalent persistence tenant key, not a second field. Identifiers are validated at the boundary.
 
 | Method and path                            | Request                                                                             | Success                                                                                                     | Authorization                                                                            |
 | ------------------------------------------ | ----------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
-| `POST /organizations`                      | `{ name, baseCurrency, accountingTimezone }`                                        | `201` with `{ organization, membership }` for the new tenant and its creator.                               | Authenticated User; `org:create` eligibility; no pre-existing membership required.       |
+| `POST /organizations`                      | `{ name, baseCurrency, accountingTimezone }`; required `Idempotency-Key` header.      | `201` with `{ organization, membership }` for the new tenant and its creator (or replayed result).          | Authenticated User; `org:create` eligibility; no pre-existing membership required.       |
 | `GET /organizations/:id`                   | Organization path identifier.                                                       | `200` with the organization's settings DTO.                                                                 | Active membership in `:id` and `org:read`.                                               |
 | `GET /organizations/:id/members`           | Organization path identifier; optional `cursor` and bounded `limit`.                | `200` with `{ items, nextCursor }`. Items contain membership fields and only approved user identity fields. | Active membership in `:id` and `member:read`.                                            |
-| `POST /organizations/:id/members`          | Proposed existing-user form: `{ userId, role }`.                                    | `201` with the created membership. Activation semantics depend on the decision below.                       | Active membership in `:id`, `member:invite`, and authority to assign the requested role. |
+| `POST /organizations/:id/members`          | Existing-user form: `{ userId, role }`.                                             | `201` with the created ACTIVE membership.                                                                  | Active membership in `:id`, `member:invite`, and authority to assign the requested role. |
 | `PATCH /organizations/:id/members/:userId` | `{ role }` only; target is the membership identified by `(organizationId, userId)`. | `200` with the updated membership, including for an unchanged role.                                         | Active membership in `:id`, `member:edit`, and authority to assign the requested role.   |
 
-The existing-user form is a minimal proposal based on the modeled User/Membership relationship. It does not establish email lookup, invitation acceptance, notifications, or automatic account creation. No endpoint for unrestricted user discovery is introduced. Confirm the member-identification/activation decision before implementing this contract.
+The existing-user form implements the confirmed Direct Add decision. It introduces no email lookup, invitation acceptance, notifications, automatic account creation, or unrestricted user discovery.
 
 Organization DTO fields are `id`, `name`, `baseCurrency`, `status`, and `accountingTimezone`; financial settings may be included only under the agreed read policy. Membership DTO fields are `userId`, `organizationId`, `role`, and `status`. Do not return raw database models, authentication data, or unrelated user memberships.
 
 **Validation and errors:**
 
-- Validate names as non-empty after trimming; validate currency and timezone against supported values. Exact length limits, supported currency set, role serialization, status values, and pagination limits must be documented in the implementation contract before coding.
+- Validate names, currencies, timezones, role/status serialization, identifiers, and pagination against the confirmed implementation contract above.
 - Reject unknown or server-controlled input fields. Clients cannot choose organization IDs, creator identity, membership status, audit actors, or their own effective privileges. The role field is a requested target role, subject to server authorization. Tenant identity is resolved from the path and authenticated access context, never overridden by a request body.
 - Use `400` for invalid identifiers, bodies, role values, or pagination; `401` for missing/expired authentication; `403` for an accessible organization where the actor lacks the required capability; `404` for an organization/resource not visible to the caller, including cross-tenant targets; `409` for duplicate membership, last-Owner violations, or detected concurrent-update conflicts.
 - Use the same non-disclosing response for absent and inaccessible tenant resources. Error responses use the shared API error format and correlation identifier; do not expose SQL, stack traces, or information about other tenants. The exact error envelope is a shared API decision, not defined by docs 01–03.
-- Return a generic infrastructure failure on an unsuccessful transaction and no partial management state. A lost creation response has an uncertain outcome: do not automatically retry organization creation until its retry/idempotency policy is defined. Membership uniqueness prevents duplicate additions, but a duplicate conflict is not a replayed success response.
+- Return a generic infrastructure failure on an unsuccessful transaction and no partial management state. After an uncertain creation response, retry with the same key and payload within the retention window. Membership uniqueness prevents duplicate additions, but a duplicate conflict is not a replayed success response.
 
 ### Tenant Isolation and Repository Boundaries
 
@@ -117,7 +197,7 @@ Authentication → Active Organization Membership → Capability Authorization
 - PostgreSQL RLS remains optional defense in depth. If adopted, establish tenant context safely for each transaction/pooled connection; it supplements authorization. Background work needs deliberate tenant policies. This specification does not require a new RLS architecture.
 - Read current authoritative membership/role state for authorization, or invalidate any authorization cache/claims when it changes. Check permission again on submission even if the UI previously displayed an enabled control.
 
-**Database design implications — requirements only, no schema or migration changes in this task:**
+**Database design — implemented with the approved additive Task 1.3 migration:**
 
 | Pillar      | Required treatment in later implementation                                                                                                                                   |
 | ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -127,11 +207,11 @@ Authentication → Active Organization Membership → Capability Authorization
 | Scalability | Store individual memberships rather than an unbounded organization-embedded member array; keep application state in shared persistence.                                      |
 | Reliability | Short transactions with no external calls; roll back partial writes; define safe retries; preserve historical actor references and audit history.                            |
 
-For the later database task, verify schema/validation enforcement, safe reversible migrations, index/query plans, tenant scoping and authorization, transaction/idempotency policy, and compatibility with existing records. This documentation task changes none of those mechanisms.
+Integration tests verify schema constraints, migration rollback/reapplication, preservation of existing sessions, query plans for scoped member lookup/pagination, authorization, transaction rollback, and concurrency. Index creation on the existing membership table takes a schema lock; plan migration execution for the deployment's data volume. Rollback drops the two new tables and requires approval on shared data; prefer a forward fix where history must be preserved.
 
-### RBAC — Initial Feature Capabilities
+### RBAC — Feature Capabilities
 
-Capability names below are proposed for this feature. The complete role-to-capability matrix remains deferred by docs 01–03. These entries describe the task's intended management actors; they do not authorize unspecified role promotions or define permissions for other financial workflows.
+These capabilities are implemented for organization management. The complete financial role-to-capability matrix remains deferred. Assignment authority is separately constrained by the confirmed strict Owner/Admin policy above.
 
 | Capability      | Meaning                                                       | Intended access for this feature                                                                                          |
 | --------------- | ------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
@@ -143,15 +223,65 @@ Capability names below are proposed for this feature. The complete role-to-capab
 
 Accountant, Finance Member, and Viewer receive no membership mutation capability from this feature. Capabilities must be checked in application services rather than scattered Owner/Admin string comparisons. The existing `financial_controls:manage` capability is separate; managing members does not implicitly grant threshold editing, financial approvals, or posting capabilities.
 
-### Unresolved Decisions in the Authoritative Docs
+### Task 1.4 — Dynamic Access Authorization
 
-These points must be settled before implementing the affected behavior. They are not additional feature commitments.
+Tenant access now comes from `permissions` and `role_permissions`, seeded by
+`004_rbac_permissions`. The role column uses the existing `membership_role` enum.
+The capability table above describes initial grants, not hardcoded runtime
+access: removing an Admin's `member:invite` mapping denies the next request with
+`403`; restoring it permits Direct Add again, subject to Option A. Granting Viewer
+`org:read` permits settings reads without changing that user's role.
 
-1. **Adding versus inviting:** docs 01–03 model Membership but no invitation entity, acceptance flow, email identity field, or activation rules. Should the initial flow directly add an existing User (the minimal API proposal), or does the product require an invitation design? How is the User identified without exposing a global user directory?
-2. **Role-assignment authority:** the complete permission matrix is explicitly deferred. Can Admins grant Owner/Admin, edit an Owner, or change their own role? What authority governs Owner promotion/demotion? The at-least-one-active-Owner invariant applies regardless; do not infer unrestricted assignment from `member:edit`.
-3. **Status and initialization:** what Organization/Membership status values and transitions exist, and how are initial active state and `financialSettings` initialized? The schema must not invent status enums or monetary threshold defaults. Which financial settings may management DTOs expose?
-4. **Creation retry identity:** financial command idempotency is defined, but organization creation has no existing tenant key and no defined idempotency scope. Agree how a retry after a lost response recovers the first result without accidentally creating a second organization; do not assume names are unique.
-5. **Shared transport details:** confirm identifier formats, role serialization, field limits, pagination defaults/maxima, and the standard error envelope. Docs 01–03 specify concepts and error classes rather than these wire details.
+`RequestCapabilityResolver` loads active membership and all mapped codes in one
+tenant/user-scoped left join. Its cache lasts only for the request's application
+transaction; no grant is stored in the session or shared across requests. A role
+with no mappings receives zero tenant capabilities. After the organization lock
+is acquired, the cached snapshot is invalidated and reloaded so lock contention
+cannot preserve a revoked capability or an earlier privileged membership role.
+Application authorization checks use `capabilities.includes(...)`, with no
+role-name comparisons or fallback grants in that layer. `authenticate` and the
+public HTTP request/response contracts remain unchanged.
+
+The confirmed hybrid model keeps three structural domain rules explicit:
+authenticated active-user organization bootstrap, Option A assignment limits,
+and Last Owner retention. These are independent of configurable endpoint access.
+`org:create` is present in the catalog but is not mapped to a membership role;
+a new user needs no existing membership to create an organization. In particular,
+giving a Viewer a mutation capability does not grant assignment authority, and
+granting an Admin all capabilities still cannot permit editing Owners/Admins or
+promoting a standard member to OWNER/ADMIN. Capability checks themselves are
+not audited; mutations keep their existing audit behavior.
+
+Role/permission mappings apply globally, while membership and resources remain
+tenant-scoped. Permission administration is trusted database work; this task
+introduces no management UI or grant-writing API. See the [database guide](../database.md#dynamic-capabilities--task-14)
+for schema, deployment, indexes, cache lifecycle, and rollback details.
+
+### Remaining Deferred Work
+
+Direct Add, strict role authority, status enums, bootstrap retry identity, and the
+transport limits are settled above. Full financial RBAC, organization/member
+lifecycle administration, financial settings initialization/editing, organization-creation UI, signup,
+and idempotency cleanup or future command lease recovery remain outside Task 1.3.
+
+### Verification
+
+Build workspace dependencies, set `TEST_DATABASE_URL` to a disposable PostgreSQL
+database, and run `npm run test:integration --workspace=@ledgerflow/api`.
+`tests/integration/organizations-postgres.test.mjs` creates/removes only its own
+random schema. It covers Last Owner (including concurrent demotions), Tenant Leak,
+strict Admin authority, live authorization after lock contention, creation replay,
+audit failure rollback for every mutation, validation, pagination/query plans,
+append-only audit enforcement, actor references, and additive migration compatibility.
+
+Verified October 18, 2026 on Node 24.5.0 and disposable PostgreSQL 16.11: all 18
+organization cases passed, including Last Owner/race and Tenant Leak. The combined
+API integration run passed 27 checks; API unit/health (14), identity database (12),
+and web (4) checks also passed. Repository lint, type-check, and build passed;
+unchanged shared/web work used Turbo cache. The available npm was 10.8.1 (the
+repository targets npm 11). No development database migration or data changes
+were performed. Browser interaction over a production HTTPS/proxy deployment
+and migration lock duration on a large existing membership table remain unverified.
 
 ## 5. UI/UX Requirements
 
@@ -159,11 +289,11 @@ These points must be settled before implementing the affected behavior. They are
 
 An authenticated new user can enter the organization name, base currency, and accounting timezone. Require explicit valid selections rather than silently assuming a currency or the server's timezone. Explain that v1 uses one base currency and that creation gives the user the Owner role. Show field-level validation, pending submission, and a clear error/success outcome. After confirmed creation, open that organization's settings with its identity visible.
 
-Do not present automatic accounting setup or posting readiness as a creation outcome. Do not silently resubmit creation after an uncertain network result; the recovery behavior depends on the retry decision in §4.
+Do not present automatic accounting setup or posting readiness as a creation outcome. Recover an uncertain creation response with the original key and payload within the retention window; never silently generate a new key for a retry.
 
 ### Organization Settings Page
 
-Use the existing app shell, design tokens, and reusable controls. Reach the page through Settings in the current organization context, and keep the organization name visible so users can identify the tenant being managed. The current shell is a preview; these are future feature requirements.
+Use the existing app shell, design tokens, and reusable controls. Reach the page through Settings in the current organization context, and keep the organization name visible so users can identify the tenant being managed. The identity pages use the responsive shell; financial sections remain previews.
 
 Display the organization's name, base currency, accounting timezone, and status, plus the Member Management section when permitted. This task specifies viewing those organization fields, not post-creation editing of currency/timezone, threshold management, ledger mappings, or organization lifecycle actions. Show only sections the caller may read; backend authorization remains authoritative for direct navigation and requests.
 
@@ -177,7 +307,7 @@ Display the organization's name, base currency, accounting timezone, and status,
 ### Add-Member Flow
 
 1. Owner/Admin opens Organization Settings and selects Add member in the visible organization context.
-2. Show a form identifying the target organization, the intended User, and role choices permitted by the agreed assignment policy. Use the existing-user identifier for the proposed API; do not introduce global search or an email invitation flow without resolving §4.
+2. Show a form identifying the target organization, the intended User UUID, and role choices permitted by the confirmed assignment policy. No global search or email invitation flow is supplied by this API.
 3. Require an explicit role selection; do not silently default to a privileged role. Validate required fields and show errors near their controls.
 4. On submission, disable duplicate submissions and show progress. The server rechecks current active membership, capability, target-role authority, and membership uniqueness.
 5. After confirmed persistence, show the returned membership/status, close or reset the form, and refresh the table. Do not say “invitation sent” or “member active” unless the agreed contract and response establish that outcome.
@@ -188,3 +318,107 @@ Display the organization's name, base currency, accounting timezone, and status,
 Provide loading placeholders; a clear no-results state; an error state with a retry where safe; and announced success feedback. A newly created organization's full member list includes its Owner, so a truly empty organization membership set is an invariant failure rather than a normal “no members yet” state. An empty later page can offer navigation back to the first page.
 
 Use semantic headings/table markup, associated form labels and field errors, keyboard-operable controls, visible focus, and accessible status announcements. If the form uses a dialog, manage focus on open/close and validation failures. At mobile widths preserve readable organization identity, member identity, role, status, and actions without clipping controls or relying on color alone.
+
+
+## 6. Tasks 1.5 and 1.6 - Tenant Repositories and Identity UI
+
+### Approved organization discovery
+
+`GET /organizations?limit=25&cursor=<organization UUID>` requires authentication.
+It returns `{ items, nextCursor }` ordered by organization UUID. The default page
+limit is 25; maximum 100. The cursor is the last returned organization UUID.
+Invalid limits, UUIDs, repeated fields, or unknown query fields return `400`;
+missing/expired authentication returns `401`. Errors use `{ error: string }` with
+`X-Request-Id`, matching the existing organization error contract.
+
+Each item has `id`, `name`, the caller's `membership` (userId, organizationId,
+role, ACTIVE status), and `capabilities: string[]`. The database query filters by
+authenticated userId and ACTIVE membership/organization before pagination.
+Clients cannot choose another user. No other member profiles, financial settings,
+or session details are exposed. One batched role-grant query supplies current
+capability hints; unmapped roles receive an empty list. Every tenant endpoint
+still authorizes against authoritative membership/capabilities in its transaction.
+
+### Implemented UI and flow refinements
+
+- `/login` accepts email/password, then opens `/organizations`. No signup flow.
+- Selection is explicit even for one organization. The page also shows the user's
+  UUID for sharing with an administrator for Direct Add. React context holds the
+  selected organization and its access hints in memory only. Refreshing Settings
+  checks the session then reopens selection. Switching, logout, and protected-request
+  `401` clear context. No organization ID or credentials enter browser storage.
+- `/settings/organization` shows name, currency, accounting timezone, and status.
+  The shell shows actual user/tenant identity, links Settings without losing
+  context, and supports switching organization and signing out.
+- Members appear when `member:read` is granted, with 25-row cursor pagination,
+  Next/First page controls, UUID, role, status, current-user marker, and permitted
+  role selects. The page never presents its row count as a total team size.
+- Add member uses the accessible Radix drawer, existing User UUID, and an explicit
+  role selection. It is Direct Add; no email invitation or account creation.
+  Both capability hints and structural Owner/Admin assignment limits govern
+  controls. The server rechecks all permissions on submission.
+- Confirmed writes announce returned UUID/role/status and refresh members. Failed
+  role changes preserve committed state. Conflict/uncertain writes reload before
+  a manual retry; failed reload or permission loss pauses changes. A self-role
+  change returns to selection to reload capabilities.
+- Protected `401` returns to Login. `403` announces **Permission Denied**, the
+  shared API message, and correlation reference where present. Inline form errors,
+  pending controls, loading/empty/error states, safe read retries, semantic tables,
+  keyboard focus restoration, and stacked member rows with visible actions on mobile
+  are included.
+
+Set public `NEXT_PUBLIC_API_URL=http://localhost:4000` before starting/building web;
+use web `http://localhost:3000` and matching WEB_ORIGIN locally. Next validates the
+public origin at startup and embeds it at build time. Browser requests use the
+existing credentialed CORS/cookie/CSRF contract directly; API_URL remains server-only
+for health. No frontend authentication proxy or trusted-IP policy is added.
+Production retains the existing same-site HTTPS requirement.
+
+### Repository pattern
+
+`apps/api/src/infrastructure/tenant-repository.ts` defines
+`BaseTenantRepository<Resource>`. Typed inherited find/update/delete query
+factories require organizationId and apply parameterized SQL scope before
+resource filters. `ensureOrganization` fails closed if a returned resource belongs
+to another organization. OrganizationStore uses these for membership lookup,
+pagination, Owner existence, and role updates, and verifies memberships returned
+from reads/inserts/updates. Its transaction-bound tenant repository interface stays
+intact; root locking uses the same scope helper.
+
+Creation and authenticated user-scoped discovery are explicit identity/bootstrap
+exceptions. Future Expense/Invoice repositories inherit the base and expose
+domain-specific methods with mandatory tenant context; inserts, joins, counts,
+and existence checks must also remain scoped. There is no generic delete API or
+change to immutable audit/history behavior. No migration is required. Existing
+user-membership and tenant/member indexes are covered by integration EXPLAIN checks;
+transaction, audit, idempotency, and concurrent Owner retention remain in force.
+
+### Reproducible browser verification
+
+Build backend dependencies, then use a disposable PostgreSQL database:
+
+```powershell
+npm run build
+$env:TEST_DATABASE_URL = '<disposable PostgreSQL URL>'
+$env:UI_BROWSER_EXECUTABLE = '<installed Chrome/Chromium executable>'
+npm run test:identity-browser --workspace=@ledgerflow/web
+```
+
+The check creates a random schema, real Argon2 identities, API server, Next.js dev
+server at 127.0.0.1:3135, and isolated Chromium profile. It cleans only its own
+schema and server processes. Results/screenshots go to ignored
+`test-results/identity-ui/`. It covers login, explicit selection/settings,
+pagination, Direct Add, role updates, last-Owner conflict, revoked capabilities,
+session expiry, Viewer denial, signout, keyboard focus, and responsive layout.
+Production HTTPS/proxy deployment is a separate deployment check.
+
+
+Verified October 19, 2026: 22 API unit checks, 8 web checks, 18 database checks,
+and 32 API integration checks passed. The real Chromium flow passed at 1280px
+and 375px with no uncaught browser errors; mobile member actions fit without
+horizontal scrolling. Screenshots were visually reviewed. Lint, type-check, and
+production build passed. Node 24.21.0 was used for final web/API and browser checks;
+the available npm was 10.9.4 (repository target: npm 11). All database work used
+a disposable local PostgreSQL 16 cluster; no development data was modified.
+Existing identity/organization migrations must already be applied. No new migration
+is introduced. Browser behavior behind production HTTPS/proxies remains unverified.

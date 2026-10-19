@@ -24,7 +24,7 @@ registerHooks({
       return {
         format: "module",
         source: ts.transpileModule(source, {
-          compilerOptions: { module: ts.ModuleKind.ESNext, jsx: ts.JsxEmit.ReactJSX }
+          compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext, jsx: ts.JsxEmit.ReactJSX }
         }).outputText,
         shortCircuit: true
       };

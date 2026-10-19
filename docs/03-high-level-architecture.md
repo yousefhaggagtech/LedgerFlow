@@ -80,7 +80,8 @@ flowchart LR
 
 Task 0.1 physical layout: this backend `src/` tree lives under `apps/api/src`.
 `apps/web` hosts Next.js; `packages/db` supplies the shared Kysely/PostgreSQL
-connection factory; `packages/shared` is reserved for framework-independent
+connection factory, identity/tenancy schema types, Kysely migrations, and development
+seed ([database contract](database.md)); `packages/shared` is reserved for framework-independent
 types and primitives (Money implementation is deferred). Backend-specific
 shared policies remain in `apps/api/src/shared`. API and future worker
 entrypoints live in `apps/api`, sharing the same modules; no separate worker
@@ -349,6 +350,32 @@ Web Frontend, API Application, Worker Process, PostgreSQL, Queue/Job infrastruct
 
 ### 4.1 Authentication & Authorization
 
+- Task 1.2 implements PostgreSQL sessions, Argon2id verification, cookie
+  authentication, CSRF origin checks, and login throttling. See
+  [authentication configuration and contracts](authentication.md). Redis remains
+  non-authoritative; membership and capability checks are separate.
+- Task 1.3 implements `modules/organizations`: routes validate transport and
+  authenticate; `OrganizationService` owns capabilities, strict assignment policy,
+  Owner retention, and transaction boundaries. `PostgresOrganizationStore` implements
+  the module's persistence interfaces with repositories bound to one organization.
+  Organization-row locks serialize member changes and authorization is rechecked
+  after locking. Bootstrap creation serializes by global User, with organization,
+  Owner, append-only audit, and completed retry response committed together.
+  Additive migration `003_organization_management` owns audit/idempotency persistence;
+  see the [organization contract](features/organization-management.md). No UI or
+  financial RBAC is introduced.
+- Task 1.4 adds database-backed tenant capabilities through
+  `004_rbac_permissions` (`permissions` and `role_permissions`, using the existing
+  membership role enum). The organization application module's
+  `RequestCapabilityResolver` consumes a `CapabilitySource` contract implemented
+  by `PostgresOrganizationTransaction`: one tenant/user-scoped left join loads
+  active membership plus all grants, with deny-by-default for unmapped roles.
+  A request-local promise cache deduplicates lookups; it is invalidated after
+  acquiring the organization lock before authoritative authorization is repeated.
+  No authorization state is cached across requests or added to sessions.
+  Bootstrap, Option A assignment limits, and Last Owner retention remain explicit
+  domain invariants independent of configurable access. See the
+  [RBAC database contract](database.md#dynamic-capabilities--task-14).
 - **Authentication** answers *who*; **authorization** answers *can this user do this in this organization*.
 - Capability-based checks (`expense:create`, `expense:reverse`, `invoice:issue`, `transfer:approve`, `bank_reconciliation:complete`) rather than role-name comparisons in business logic.
 - Requirements: secure authentication, server-side authorization, secure cookie/token handling, no unnecessary secrets in browser storage, CSRF protection for cookie-based mutations, session expiry/invalidation, audit correlation to the authenticated actor.
@@ -506,3 +533,19 @@ Business UX → Domain Workflows → Financial Policies (RBAC, Approval, Periods
 → Accounting Engine (Immutable Journal) → PostgreSQL (source of truth) → Transactional Outbox
 → Async Workers → Bank APIs / Read Models / AI and Delivery → Webhooks + Reconciliation → observable recovery
 ```
+
+
+### Implemented tenant repositories and identity UI (Tasks 1.5/1.6)
+
+Infrastructure's `BaseTenantRepository<Resource>` centralizes required tenant
+predicates for typed find/update/delete builders and verifies returned resource
+ownership. OrganizationStore inherits it within application-owned transactions.
+Root/bootstrap and authenticated user-scoped discovery are explicit identity
+exceptions. No schema/RLS or financial architecture change is introduced.
+
+Web's React identity context holds session-derived identity and selected
+organization in memory. Login, explicit selection, settings, and members use the
+existing app shell and credentialed direct API calls through public
+NEXT_PUBLIC_API_URL. The API remains the authentication/authorization boundary;
+client capability hints grant no access. There is no new frontend proxy or
+state-management dependency. See the organization feature spec for contracts.

@@ -1,7 +1,10 @@
-import express from "express";
 import { checkDatabaseConnection, createDatabaseFromEnvironment } from "@ledgerflow/db";
-import type { HealthResponse } from "@ledgerflow/shared";
-import { getHealth } from "./infrastructure/health.ts";
+import type { Database } from "@ledgerflow/db";
+import { createApp } from "./app.ts";
+import { PostgresAuthStore } from "./infrastructure/auth-store.ts";
+import { startSessionCleanup } from "./infrastructure/session-cleanup.ts";
+import { loadAuthConfig } from "./modules/auth/config.ts";
+import { PostgresOrganizationStore } from "./infrastructure/organization-store.ts";
 
 const portValue = process.env.API_PORT;
 const host = process.env.API_HOST;
@@ -16,14 +19,12 @@ if (!host?.trim()) {
   throw new Error("API_HOST is required.");
 }
 
-const app = express();
-const db = createDatabaseFromEnvironment<Record<string, never>>();
-app.disable("x-powered-by");
-app.get("/health", async (_request, response: express.Response<HealthResponse>) => {
-  const health = await getHealth(() => checkDatabaseConnection(db));
-  response.set("Cache-Control", "no-store");
-  response.status(health.database === "UP" ? 200 : 503).json(health);
-});
+const authConfig = loadAuthConfig();
+const db = createDatabaseFromEnvironment<Database>();
+const authStore = new PostgresAuthStore(db);
+const app = createApp({ authStore, authConfig, organizationStore: new PostgresOrganizationStore(db),
+  checkDatabase: () => checkDatabaseConnection(db) });
+const stopCleanup = startSessionCleanup(authStore);
 
 const server = app.listen(port, host);
 server.on("error", () => {
@@ -41,6 +42,7 @@ function shutdown(): void {
       process.exitCode = 1;
     }
     try {
+      await stopCleanup();
       await db.destroy();
     } catch {
       process.stderr.write("Database pool could not shut down cleanly.\n");

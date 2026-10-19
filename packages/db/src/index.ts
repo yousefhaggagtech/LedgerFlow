@@ -1,6 +1,12 @@
 import { Kysely, PostgresDialect, sql } from "kysely";
 import pg from "pg";
 
+export type {
+  Database, OrganizationsTable, UsersTable, MembershipsTable, SessionsTable,
+  OrganizationStatus, UserStatus, MembershipStatus, MembershipRole,
+  AuditEventsTable, IdempotencyRecordsTable, PermissionsTable, RolePermissionsTable, JsonValue
+} from "./schema.js";
+
 const POOL_MAX_CONNECTIONS = 10;
 const CONNECTION_TIMEOUT_MS = 5_000;
 const IDLE_TIMEOUT_MS = 30_000;
@@ -17,7 +23,7 @@ export async function checkDatabaseConnection<Database>(db: Kysely<Database>): P
 }
 
 // Call once per process; the owner must await db.destroy() during shutdown.
-// Consumers supply their schema types when schemas are introduced.
+// Consumers supply schema types; health-only callers can use an empty schema.
 export function createDatabase<Database>(connectionString: string): Kysely<Database> {
   let url: URL;
   try {

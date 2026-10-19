@@ -22,6 +22,8 @@ import {
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 
+export interface ShellIdentity { name: string; organizationName: string; onSwitch: () => void; onLogout: () => void }
+
 type Section = { label: string; icon: LucideIcon };
 const workspaceSections: readonly Section[] = [
   { label: "Sales", icon: ArrowUpRight },
@@ -48,16 +50,17 @@ function Brand({ collapsed = false }: { collapsed?: boolean }) {
   );
 }
 
-function NavigationLink({ section, active, collapsed, onSelect }: {
+function NavigationLink({ section, active, collapsed, onSelect, settingsHref }: {
   section: Section;
   active: string;
   collapsed: boolean;
   onSelect: (label: string) => void;
+  settingsHref: string | undefined;
 }) {
   const Icon = section.icon;
   const link = (
     <a
-      href={`#${section.label.toLowerCase().replaceAll(" ", "-")}`}
+      href={section.label === "Settings" && settingsHref ? settingsHref : `#${section.label.toLowerCase().replaceAll(" ", "-")}`}
       aria-current={active === section.label ? "page" : undefined}
       onClick={(event) => {
         // Local selection previews the shell until feature routes are introduced.
@@ -83,15 +86,16 @@ function NavigationLink({ section, active, collapsed, onSelect }: {
   );
 }
 
-function SidebarNavigation({ active, collapsed = false, onSelect, id }: {
+function SidebarNavigation({ active, collapsed = false, onSelect, id, settingsHref }: {
   active: string;
   collapsed?: boolean;
   onSelect: (label: string) => void;
   id: string;
+  settingsHref: string | undefined;
 }) {
   const renderLink = (section: Section) => (
     <li key={section.label}>
-      <NavigationLink section={section} active={active} collapsed={collapsed} onSelect={onSelect} />
+      <NavigationLink section={section} active={active} collapsed={collapsed} onSelect={onSelect} settingsHref={settingsHref} />
     </li>
   );
   return (
@@ -109,15 +113,15 @@ function SidebarNavigation({ active, collapsed = false, onSelect, id }: {
   );
 }
 
-function ProfileMenu() {
+function ProfileMenu({ identity }: { identity: ShellIdentity | undefined }) {
   const [notice, setNotice] = useState("");
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
         <Button variant="ghost" className="h-nav-item gap-2 px-2" aria-label="Open user menu">
-          <Avatar><AvatarFallback className="bg-secondary text-xs font-semibold text-secondary-foreground">DU</AvatarFallback></Avatar>
-          <span className="hidden text-left sm:block">
-            <span className="block text-sm font-medium">Demo User</span>
+          <Avatar><AvatarFallback className="bg-secondary text-xs font-semibold text-secondary-foreground">{identity ? identity.name.slice(0, 2).toUpperCase() : "DU"}</AvatarFallback></Avatar>
+          <span className="hidden max-w-40 truncate text-left sm:block">
+            <span className="block text-sm font-medium">{identity?.name ?? "Demo User"}</span>
             <span className="block text-xs font-normal text-muted-foreground">Personal profile</span>
           </span>
           <ChevronDown className="size-4 text-muted-foreground" aria-hidden="true" />
@@ -125,22 +129,31 @@ function ProfileMenu() {
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-profile-menu">
         <DropdownMenuLabel>
-          <p>Demo User</p>
-          <p className="mt-1 text-xs font-normal text-muted-foreground">Profile preview</p>
+          <p className="break-words">{identity?.name ?? "Demo User"}</p>
+          <p className="mt-1 text-xs font-normal text-muted-foreground">{identity ? "Signed in" : "Profile preview"}</p>
         </DropdownMenuLabel>
         <DropdownMenuSeparator />
+        {identity ? <>
+          <DropdownMenuItem onSelect={identity.onSwitch}>Switch organization</DropdownMenuItem>
+          <DropdownMenuItem onSelect={identity.onLogout}>Sign out</DropdownMenuItem>
+        </> : <>
         <DropdownMenuItem onSelect={(event) => { event.preventDefault(); setNotice("Your profile will be available in a future update."); }}>My profile</DropdownMenuItem>
         <DropdownMenuItem onSelect={(event) => { event.preventDefault(); setNotice("Account settings will be available in a future update."); }}>Account settings</DropdownMenuItem>
         <p role="status" className="px-2 py-2 text-xs text-muted-foreground">{notice || "These actions are placeholders."}</p>
+        </>}
       </DropdownMenuContent>
     </DropdownMenu>
   );
 }
 
-export function Layout({ children }: { children: ReactNode }) {
+export function Layout({ children, identity, settingsHref, section, onSettings }: { children: ReactNode; identity?: ShellIdentity; settingsHref?: string; section?: string; onSettings?: () => void }) {
   const [collapsed, setCollapsed] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
-  const [active, setActive] = useState(workspaceSections[0]?.label ?? "Sales");
+  const [active, setActive] = useState(section ?? workspaceSections[0]?.label ?? "Sales");
+  const selectSection = (label: string) => {
+    setActive(label);
+    if (label === "Settings") onSettings?.();
+  };
 
   useEffect(() => {
     // Read the same breakpoint used by Tailwind to avoid a second responsive rule.
@@ -179,7 +192,7 @@ export function Layout({ children }: { children: ReactNode }) {
         >
           <Brand collapsed={collapsed} />
           <Separator />
-          <SidebarNavigation id="desktop-navigation" active={active} collapsed={collapsed} onSelect={setActive} />
+          <SidebarNavigation id="desktop-navigation" active={active} collapsed={collapsed} onSelect={selectSection} settingsHref={settingsHref} />
           <div className="border-t p-2">
             {/* A stable trigger keeps keyboard focus when the sidebar changes width. */}
             <Tooltip>
@@ -200,7 +213,7 @@ export function Layout({ children }: { children: ReactNode }) {
                 <div className="min-w-0 space-y-1">
                   <p className="flex items-center gap-2 truncate font-semibold">
                     <Building2 className="hidden size-4 shrink-0 text-muted-foreground sm:block" aria-hidden="true" />
-                    Acme Studio
+                    {identity?.organizationName ?? "Acme Studio"}
                   </p>
                   <Breadcrumb aria-label="Breadcrumb">
                     <BreadcrumbList className="gap-1 text-xs sm:gap-1">
@@ -211,14 +224,14 @@ export function Layout({ children }: { children: ReactNode }) {
                   </Breadcrumb>
                 </div>
               </div>
-              <ProfileMenu />
+              <ProfileMenu identity={identity} />
             </header>
             <SheetContent side="left" showCloseButton={false} className="gap-0 p-0">
               <SheetTitle className="sr-only">LedgerFlow navigation</SheetTitle>
-              <SheetDescription className="sr-only">Choose a workspace section. Sections are previews.</SheetDescription>
+              <SheetDescription className="sr-only">Open Settings or preview a workspace section.</SheetDescription>
               <Brand />
               <Separator />
-              <SidebarNavigation id="mobile-navigation" active={active} onSelect={(label) => { setActive(label); setMobileOpen(false); }} />
+              <SidebarNavigation id="mobile-navigation" active={active} onSelect={(label) => { selectSection(label); setMobileOpen(false); }} settingsHref={settingsHref} />
               <div className="border-t p-3">
                 <SheetClose asChild><Button variant="outline" className="w-full">Close navigation</Button></SheetClose>
               </div>

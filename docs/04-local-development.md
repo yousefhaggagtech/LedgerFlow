@@ -66,7 +66,9 @@ The API uses Node's built-in TypeScript stripping and watch mode; no runtime
 TypeScript runner is needed. Its scripts explicitly load the root `.env`.
 Next.js loads the root `.env` and uses server-only `API_URL`. Redis and RabbitMQ
 clients and the worker entrypoint are deferred. The API creates a database
-pool at startup and connects on health requests.
+pool at startup and uses it for health checks and PostgreSQL sessions.
+Task 1.2 requires `WEB_ORIGIN=http://localhost:3000` in the root `.env` and
+the latest migrations; see [authentication setup and cURL checks](authentication.md).
 
 ## Manual acceptance checks
 
@@ -120,15 +122,17 @@ docker compose stop
   infrastructure, not a production deployment or backup strategy.
 - `createDatabase<Database>(url)` validates the URL and creates a bounded,
   lazy connection pool. Call once per process and await `db.destroy()` on
-  shutdown. No tables, schema types, migrations, or tenant data exist; only
-  the `SELECT 1` connectivity query is implemented.
+  shutdown. Task 1.1 adds identity/tenancy schema types, migrations, and a
+  development seed; see [database setup and verification](database.md).
+  Run `npm run migrate --workspace=@ledgerflow/db` before seeding.
   Tenant-scoped repositories and authorization must precede business queries.
 - Shared workspace packages export compiled ESM and declarations; Turbo
   builds upstream packages before consumers. Domain code must not import DB
   or transport dependencies.
 - The main page displays a workspace preview and system connectivity inside
   the responsive app shell. Shared UI components and their usage rules are
-  documented in [design tokens](design-tokens.md). Authentication, business
+  documented in [design tokens](design-tokens.md). Login/logout and session
+  middleware are implemented; login UI, tenant authorization, business
   features, financial logic, and Money implementation are deferred.
 
 ## Verification status

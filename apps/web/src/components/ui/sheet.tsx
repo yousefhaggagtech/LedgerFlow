@@ -47,10 +47,12 @@ function SheetContent({
   className,
   children,
   side = "right",
+  width = "navigation",
   showCloseButton = true,
   ...props
 }: React.ComponentProps<typeof SheetPrimitive.Content> & {
   side?: "top" | "right" | "bottom" | "left"
+  width?: "navigation" | "form"
   showCloseButton?: boolean
 }) {
   return (
@@ -61,9 +63,10 @@ function SheetContent({
         className={cn(
           "fixed z-50 flex flex-col gap-4 bg-card shadow-lg",
           side === "right" &&
-            "inset-y-0 right-0 h-full w-sidebar-expanded max-w-full border-l",
+            "inset-y-0 right-0 h-full max-w-full border-l",
           side === "left" &&
-            "inset-y-0 left-0 h-full w-sidebar-expanded max-w-full border-r",
+            "inset-y-0 left-0 h-full max-w-full border-r",
+          (side === "right" || side === "left") && (width === "form" ? "w-full sm:max-w-md" : "w-sidebar-expanded"),
           side === "top" &&
             "inset-x-0 top-0 h-auto border-b",
           side === "bottom" &&

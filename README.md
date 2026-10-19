@@ -225,8 +225,20 @@ Stop dev with Ctrl+C, then run `npm run lint`, `npm run typecheck`, and
 no separate style linter is installed. Health mapping tests run with
 `npm run test --workspace=@ledgerflow/api` after building. The first install creates
 `package-lock.json`; review and commit it for reproducible `npm ci` installs.
-Worker execution, schema/migrations, authentication, storage, and external
-providers are deferred.
+Identity/tenancy migrations and a development seed are available; see the
+[database guide](docs/database.md) for commands and constraint verification.
+Session authentication is available through login/logout and `/auth/me`; add
+`WEB_ORIGIN=http://localhost:3000` to an existing `.env` and apply migrations.
+See [authentication setup and verification](docs/authentication.md).
+Organization creation/settings and member management are available with capability
+authorization, tenant scoping, atomic audit writes, creation idempotency, and
+concurrent Owner retention; see the [organization API contract](docs/features/organization-management.md).
+Apply migrations before using these endpoints. Login (`/login`), organization
+selection, settings, and member management UI are available. Add
+`NEXT_PUBLIC_API_URL=http://localhost:4000` to an existing root `.env` before
+starting/building web; open `http://localhost:3000`. Selected organization context
+is held in memory. Signup, organization-creation UI, workers, object storage, and
+external providers are deferred.
 The planned verification strategy covers domain unit tests, real-database integration tests for constraints and concurrency, provider contract tests, and end-to-end financial workflows. Retry duplication, overpayment races, tenant leakage, self-approval, and posting recovery are explicit test targets.
 
 ## Documentation
