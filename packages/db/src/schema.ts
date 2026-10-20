@@ -29,7 +29,7 @@ export interface UsersTable extends Timestamps {
 
 export interface MembershipsTable extends Timestamps {
   id: Generated<string>;
-  organization_id: string;
+  organization_id: ColumnType<string, string, never>;
   user_id: string;
   role: MembershipRole;
   status: Generated<MembershipStatus>;
@@ -62,13 +62,14 @@ type JsonObjectColumn = ColumnType<{ [key: string]: JsonValue }, string, string>
 
 export interface AuditEventsTable {
   id: Generated<string>;
-  organization_id: string;
+  organization_id: ColumnType<string, string, never>;
   actor_kind: "HUMAN" | "SYSTEM";
   actor_membership_id: string | null;
   actor_user_id: string | null;
   action: "ORGANIZATION_CREATED" | "MEMBER_ADDED" | "MEMBER_ROLE_CHANGED";
   target_type: "ORGANIZATION" | "MEMBERSHIP";
   target_id: string;
+  target_membership_id: ColumnType<string | null, never, never>;
   occurred_at: Generated<Date>;
   correlation_id: string;
   previous_state: JsonObjectColumn | null;
@@ -78,7 +79,7 @@ export interface AuditEventsTable {
 export interface IdempotencyRecordsTable {
   id: Generated<string>;
   user_id: string;
-  organization_id: string;
+  organization_id: ColumnType<string, string, never>;
   command_type: string;
   idempotency_key: string;
   request_hash: string;

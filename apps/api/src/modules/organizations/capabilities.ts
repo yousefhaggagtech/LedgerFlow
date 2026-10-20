@@ -21,8 +21,12 @@ export class RequestCapabilityResolver {
     const key = JSON.stringify([organizationId, userId]);
     let pending = this.cache.get(key);
     if (!pending) {
-      pending = this.source.findAuthorization(organizationId, userId).then((member) => member
-        ? Object.freeze({ ...member, capabilities: Object.freeze([...member.capabilities]) }) : undefined);
+      pending = this.source.findAuthorization(organizationId, userId).then((member) => {
+        if (member && (member.organizationId !== organizationId || member.userId !== userId)) {
+          throw new Error("Authorization source returned an invalid scope.");
+        }
+        return member ? Object.freeze({ ...member, capabilities: Object.freeze([...member.capabilities]) }) : undefined;
+      });
       this.cache.set(key, pending);
     }
     return pending;

@@ -8,7 +8,7 @@
     "build": "tsc -p tsconfig.json",
     "migrate": "npm run build && node --env-file=../../.env dist/migrate.js",
     "seed": "npm run build && node --env-file=../../.env dist/seed.js",
-    "test": "npm run build && node --env-file=../../.env --test tests/*.test.mjs",
+    "test": "npm run build && node --env-file=../../.env --test --test-concurrency=1 tests/*.test.mjs",
     "lint": "tsc -p tsconfig.json --noEmit",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },

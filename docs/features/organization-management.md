@@ -377,21 +377,49 @@ Production retains the existing same-site HTTPS requirement.
 ### Repository pattern
 
 `apps/api/src/infrastructure/tenant-repository.ts` defines
-`BaseTenantRepository<Resource>`. Typed inherited find/update/delete query
-factories require organizationId and apply parameterized SQL scope before
-resource filters. `ensureOrganization` fails closed if a returned resource belongs
+`BaseTenantRepository<Resource>`. Each instance captures immutable organization
+and actor IDs from an authenticated transaction's checked repository factory.
+Typed inherited find/update/delete query factories automatically apply this
+parameterized scope before resource filters; callers cannot substitute another
+tenant per method. `insertValues` injects organization_id and rejects supplied
+ownership fields. `ensureOrganization` fails closed if a returned resource belongs
 to another organization. OrganizationStore uses these for membership lookup,
 pagination, Owner existence, and role updates, and verifies memberships returned
 from reads/inserts/updates. Its transaction-bound tenant repository interface stays
-intact; root locking uses the same scope helper.
+decoupled from Kysely; root locking scopes organizations.id because the root itself
+has no organization_id column. Missing role-update targets now return a controlled
+404 instead of a query-builder exception.
 
 Creation and authenticated user-scoped discovery are explicit identity/bootstrap
 exceptions. Future Expense/Invoice repositories inherit the base and expose
 domain-specific methods with mandatory tenant context; inserts, joins, counts,
 and existence checks must also remain scoped. There is no generic delete API or
-change to immutable audit/history behavior. No migration is required. Existing
+change to immutable audit/history behavior. Existing
 user-membership and tenant/member indexes are covered by integration EXPLAIN checks;
 transaction, audit, idempotency, and concurrent Owner retention remain in force.
+
+The hardening migration `005_tenant_relationship_guards` adds composite FKs for
+audit membership targets and idempotency creators, plus organization-target and
+creation-snapshot scope checks. See [deployment preflight and lock/rewrite
+requirements](../database.md#tenant-isolation-hardening--migration-005).
+
+`OrganizationStore.transaction({ userId }, work)` captures identity from the
+authenticated session supplied by the service, never from a body tenant/user field.
+`forOrganization` is asynchronous and verifies that user's active membership
+before issuing a repository. The bootstrap exception covers only organization IDs
+actually created in that same transaction after locking its active creator.
+Discovery/idempotency lookup use the captured user, not a replacement caller ID.
+Capability resolution rejects returned membership/user scope mismatches; capability
+checks remain in the service and are reloaded after acquiring the organization lock.
+Audit insertion checks the actor against the repository's tenant and session user.
+Creation replay checks stored snapshot ownership before returning any response.
+
+HTTP paths, bodies, status conventions, session cookies, global identity access,
+and role-assignment/Owner policies are unchanged. Only the internal repository
+transaction interface changes; alternate stores must implement the same context
+and membership contract. A scoped repository is valid only inside its transaction.
+Repository code must not bypass inherited scope helpers with raw/unscoped SQL;
+composite FKs and application types do not make arbitrary SQL tenant-safe.
 
 ### Reproducible browser verification
 

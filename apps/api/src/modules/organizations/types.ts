@@ -28,6 +28,7 @@ export interface AccessibleOrganization {
   capabilities: string[];
 }
 export interface Actor { userId: string; correlationId: string }
+export interface AuthenticatedContext { readonly userId: string }
 
 export interface AuditChange {
   actor: StoredMembership;
@@ -58,17 +59,17 @@ export interface CreationRecord {
 }
 
 export interface OrganizationTransaction extends CapabilitySource {
-  listForUser(userId: string, page: PageInput): Promise<AccessibleOrganization[]>;
-  forOrganization(organizationId: string): OrganizationRepository;
-  lockCreator(userId: string): Promise<boolean>;
+  listForUser(page: PageInput): Promise<AccessibleOrganization[]>;
+  forOrganization(organizationId: string): Promise<OrganizationRepository>;
+  lockCreator(): Promise<boolean>;
   findActiveUser(userId: string): Promise<boolean>;
   createOrganization(input: CreateOrganizationInput): Promise<Organization>;
-  findCreation(userId: string, key: string): Promise<CreationRecord | undefined>;
-  saveCreation(userId: string, key: string, hash: string, result: CreationResult, expiresAt: Date): Promise<void>;
+  findCreation(key: string): Promise<CreationRecord | undefined>;
+  saveCreation(key: string, hash: string, result: CreationResult, expiresAt: Date): Promise<void>;
 }
 
 export interface OrganizationStore {
-  transaction<T>(work: (transaction: OrganizationTransaction) => Promise<T>): Promise<T>;
+  transaction<T>(context: AuthenticatedContext, work: (transaction: OrganizationTransaction) => Promise<T>): Promise<T>;
 }
 
 export class OrganizationError extends Error {

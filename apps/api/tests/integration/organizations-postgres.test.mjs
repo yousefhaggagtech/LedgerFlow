@@ -360,7 +360,7 @@ test("organization management on PostgreSQL", async (t) => {
       const permission = await db.selectFrom("permissions").select("id").where("code", "=", "member:invite").executeTakeFirstOrThrow();
       let observed;
       const read = new Promise((resolve) => { observed = resolve; });
-      const watchedStore = { transaction: (work) => organizationStore.transaction((transaction) => work(new Proxy(transaction, {
+      const watchedStore = { transaction: (context, work) => organizationStore.transaction(context, (transaction) => work(new Proxy(transaction, {
         get(instance, key) {
           if (key === "findAuthorization") return async (organizationId, userId) => {
             const result = await instance.findAuthorization(organizationId, userId);
@@ -424,7 +424,7 @@ test("organization management on PostgreSQL", async (t) => {
       assert.equal((await f.add(f.owner, administrator, "ADMIN")).status, 201);
       let observed;
       const read = new Promise((resolve) => { observed = resolve; });
-      const watchedStore = { transaction: (work) => organizationStore.transaction((transaction) => work(new Proxy(transaction, {
+      const watchedStore = { transaction: (context, work) => organizationStore.transaction(context, (transaction) => work(new Proxy(transaction, {
         get(instance, key) {
           if (key === "findAuthorization") return async (organizationId, id) => {
             const result = await instance.findAuthorization(organizationId, id);
@@ -588,7 +588,8 @@ test("organization management on PostgreSQL", async (t) => {
         await assert.rejects(db.insertInto("audit_events").values({ ...auditBase, ...override }).execute(), { code: "23514" });
       }
       const record = { user_id: a.owner.id, organization_id: a.result.organization.id, command_type: "organization:create",
-        idempotency_key: randomUUID(), request_hash: "a".repeat(64), response_status: 201, response_snapshot: "{}", expires_at: new Date(Date.now() + 1_000) };
+        idempotency_key: randomUUID(), request_hash: "a".repeat(64), response_status: 201,
+        response_snapshot: JSON.stringify(a.result), expires_at: new Date(Date.now() + 1_000) };
       for (const override of [{ request_hash: "bad" }, { status: "IN_PROGRESS" }, { response_status: 500 }, { response_snapshot: "[]" },
         { idempotency_key: "bad key" }, { expires_at: new Date(0) }]) {
         await assert.rejects(db.insertInto("idempotency_records").values({ ...record, ...override }).execute(), { code: "23514" });

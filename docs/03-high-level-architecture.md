@@ -541,7 +541,17 @@ Infrastructure's `BaseTenantRepository<Resource>` centralizes required tenant
 predicates for typed find/update/delete builders and verifies returned resource
 ownership. OrganizationStore inherits it within application-owned transactions.
 Root/bootstrap and authenticated user-scoped discovery are explicit identity
-exceptions. No schema/RLS or financial architecture change is introduced.
+exceptions. No RLS or financial architecture change is introduced.
+
+Tenant hardening binds OrganizationStore transactions to the authenticated user.
+Its asynchronous repository factory checks active membership; only roots created
+in that transaction after locking the creator may bootstrap without a membership.
+The base repository captures tenant/actor identity once and derives query predicates
+and insert ownership internally. Services retain capability checks and transaction
+boundaries through database-independent interfaces. Migration 005 adds native
+composite membership FKs for audit targets and idempotency creators, retaining
+global identity/catalog boundaries. Its generated audit target column requires an
+approved PostgreSQL 16 table rewrite/maintenance window; see database.md.
 
 Web's React identity context holds session-derived identity and selected
 organization in memory. Login, explicit selection, settings, and members use the

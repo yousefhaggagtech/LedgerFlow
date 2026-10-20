@@ -9,23 +9,46 @@ const db = new Kysely({ dialect: {
 } });
 // An unrelated future module can inherit the pattern without depending on OrganizationStore.
 class ExpenseRepository extends BaseTenantRepository {
-  findById(organizationId, id) { return this.find(organizationId, db.selectFrom("expenses")).selectAll().where("id", "=", id); }
-  updateById(organizationId, id) { return this.update(organizationId, db.updateTable("expenses")).set({ name: "Updated" }).where("id", "=", id); }
-  deleteById(organizationId, id) { return this.delete(organizationId, db.deleteFrom("expenses")).where("id", "=", id); }
-  verify(organizationId, resource) { return this.ensureOrganization(organizationId, resource); }
+  findById(id) { return this.find(db.selectFrom("expenses")).selectAll().where("id", "=", id); }
+  updateById(id) { return this.update(db.updateTable("expenses")).set({ name: "Updated" }).where("id", "=", id); }
+  deleteById(id) { return this.delete(db.deleteFrom("expenses")).where("id", "=", id); }
+  insert(input) { return db.insertInto("expenses").values(this.insertValues(input)); }
+  aliased(id) { return this.find(db.selectFrom("expenses as e"), "e.organization_id").selectAll().where("e.id", "=", id); }
+  verify(resource) { return this.ensureOrganization(resource); }
 }
-const repository = new ExpenseRepository();
+const context = { organizationId: "tenant-a", userId: "user-a" };
+const repository = new ExpenseRepository(context);
 test("find, update, and delete parameterize tenant scope alongside resource identity", () => {
   for (const method of ["findById", "updateById", "deleteById"]) {
-    const query = repository[method]("tenant-a", "resource-b").compile();
+    const query = repository[method]("resource-b").compile();
     assert.match(query.sql, /where "organization_id" = \$\d and "id" = \$\d/);
     assert.deepEqual(query.parameters.slice(-2), ["tenant-a", "resource-b"]);
     assert.doesNotMatch(query.sql, /tenant-a|resource-b/);
-    assert.throws(() => repository[method]("", "resource-b"), /Organization scope is required/);
   }
 });
 test("returned-resource guard fails closed for a foreign tenant", () => {
   const record = { organizationId: "tenant-a", id: "expense" };
-  assert.equal(repository.verify("tenant-a", record), record);
-  assert.throws(() => repository.verify("tenant-b", record), /invalid organization scope/);
+  assert.equal(repository.verify(record), record);
+  assert.throws(() => repository.verify({ ...record, organizationId: "tenant-b" }), /invalid organization scope/);
+});
+
+test("scope is captured once and rejects missing identity or organization", () => {
+  for (const invalid of [{ ...context, userId: " " }, { ...context, organizationId: "" }]) {
+    assert.throws(() => new ExpenseRepository(invalid), /Authenticated tenant context is required/);
+  }
+  const mutable = { ...context };
+  const scoped = new ExpenseRepository(mutable);
+  mutable.organizationId = "tenant-b";
+  mutable.userId = "user-b";
+  assert.deepEqual(scoped.findById("resource").compile().parameters, ["tenant-a", "resource"]);
+  assert.deepEqual(scoped.aliased("resource").compile().parameters, ["tenant-a", "resource"]);
+});
+
+test("inserts derive tenant scope internally and reject supplied ownership", () => {
+  const query = repository.insert({ id: "resource", name: "Expense" }).compile();
+  assert.match(query.sql, /"organization_id"/);
+  assert.deepEqual(query.parameters, ["resource", "Expense", "tenant-a"]);
+  for (const organization_id of ["tenant-b", "tenant-a", undefined]) {
+    assert.throws(() => repository.insert({ id: "resource", organization_id }), /cannot be supplied/);
+  }
 });

@@ -67,6 +67,15 @@ test("database failures propagate and never become a permission grant", async ()
   await assert.rejects(resolver.resolve("organization", "user"), failure);
 });
 
+test("authorization rejects a source returning another tenant or user's membership", async () => {
+  for (const override of [{ organizationId: "other" }, { userId: "other" }]) {
+    const resolver = new RequestCapabilityResolver({ async findAuthorization() {
+      return { ...member, ...override, capabilities: ["org:read"] };
+    } });
+    await assert.rejects(resolver.resolve("organization", "user"), /invalid scope/);
+  }
+});
+
 test("capability grants do not override structural Option A assignment limits", () => {
   const administrator = { ...member, role: "ADMIN", capabilities: ["member:invite", "member:edit"] };
   requireAssignment(administrator, "VIEWER");

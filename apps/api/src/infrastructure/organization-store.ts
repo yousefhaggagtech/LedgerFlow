@@ -2,7 +2,7 @@ import type { Kysely, Transaction } from "kysely";
 import { BaseTenantRepository, tenantScope } from "./tenant-repository.ts";
 import type { Database, MembershipRole } from "@ledgerflow/db";
 import { OrganizationError, type AuditChange, type CreateOrganizationInput, type CreationResult,
-  type StoredMembership, type OrganizationRepository, type OrganizationStore, type OrganizationTransaction, type PageInput } from "../modules/organizations/types.ts";
+  type StoredMembership, type AuthenticatedContext, type OrganizationRepository, type OrganizationStore, type OrganizationTransaction, type PageInput } from "../modules/organizations/types.ts";
 
 const CREATION_COMMAND = "organization:create";
 const ORGANIZATION_FIELDS = ["id", "name", "base_currency as baseCurrency", "accounting_timezone as accountingTimezone", "status"] as const;
@@ -10,68 +10,72 @@ const MEMBER_FIELDS = ["id", "user_id as userId", "organization_id as organizati
 
 class ScopedOrganizationRepository extends BaseTenantRepository<StoredMembership> implements OrganizationRepository {
   private readonly trx: Transaction<Database>;
-  private readonly organizationId: string;
 
-  constructor(trx: Transaction<Database>, organizationId: string) {
-    super();
+  constructor(trx: Transaction<Database>, context: AuthenticatedContext & { readonly organizationId: string }) {
+    super(context);
     this.trx = trx;
-    this.organizationId = organizationId;
   }
 
   async findMembership(userId: string) {
-    const member = await this.find(this.organizationId, this.trx.selectFrom("memberships")).select(MEMBER_FIELDS)
+    const member = await this.find(this.trx.selectFrom("memberships")).select(MEMBER_FIELDS)
       .where("user_id", "=", userId).executeTakeFirst();
-    return member && this.ensureOrganization(this.organizationId, member);
+    return member && this.ensureOrganization(member);
   }
 
   organization(lock: "read" | "write") {
-    const query = this.trx.selectFrom("organizations").select(ORGANIZATION_FIELDS).where(tenantScope(this.organizationId, "organizations.id"));
+    const query = this.trx.selectFrom("organizations").select(ORGANIZATION_FIELDS).where(this.scope("organizations.id"));
     return (lock === "write" ? query.forUpdate() : query.forShare()).executeTakeFirst();
   }
 
   async listMembers(page: PageInput) {
-    let query = this.find(this.organizationId, this.trx.selectFrom("memberships")).select(MEMBER_FIELDS);
+    let query = this.find(this.trx.selectFrom("memberships")).select(MEMBER_FIELDS);
     if (page.cursor) query = query.where("user_id", ">", page.cursor);
     const members = await query.orderBy("user_id").limit(page.limit + 1).execute();
-    return members.map((member) => this.ensureOrganization(this.organizationId, member));
+    return members.map((member) => this.ensureOrganization(member));
   }
 
   async addMember(userId: string, role: MembershipRole) {
-    const member = await this.trx.insertInto("memberships").values({ organization_id: this.organizationId,
-      user_id: userId, role, status: "ACTIVE" }).returning(MEMBER_FIELDS).executeTakeFirstOrThrow();
-    return this.ensureOrganization(this.organizationId, member);
+    const member = await this.trx.insertInto("memberships").values(this.insertValues({
+      user_id: userId, role, status: "ACTIVE" as const })).returning(MEMBER_FIELDS).executeTakeFirstOrThrow();
+    return this.ensureOrganization(member);
   }
 
   async changeRole(userId: string, role: MembershipRole) {
-    const member = await this.update(this.organizationId, this.trx.updateTable("memberships")).set({ role, updated_at: new Date() })
-      .where("user_id", "=", userId).returning(MEMBER_FIELDS).executeTakeFirstOrThrow();
-    return this.ensureOrganization(this.organizationId, member);
+    const member = await this.update(this.trx.updateTable("memberships")).set({ role, updated_at: new Date() })
+      .where("user_id", "=", userId).returning(MEMBER_FIELDS).executeTakeFirst();
+    if (!member) throw new OrganizationError(404, "Membership not found.");
+    return this.ensureOrganization(member);
   }
 
   async hasOtherActiveOwner(userId: string): Promise<boolean> {
-    const owner = await this.find(this.organizationId, this.trx.selectFrom("memberships")).select("id")
+    const owner = await this.find(this.trx.selectFrom("memberships")).select("id")
       .where("role", "=", "OWNER").where("status", "=", "ACTIVE").where("user_id", "!=", userId).limit(1).executeTakeFirst();
     return owner !== undefined;
   }
 
   async audit(change: AuditChange): Promise<void> {
-    await this.trx.insertInto("audit_events").values({ organization_id: this.organizationId,
+    this.ensureOrganization(change.actor);
+    if (change.actor.userId !== this.actorUserId) throw new Error("Audit actor does not match the authenticated user.");
+    await this.trx.insertInto("audit_events").values(this.insertValues({
       actor_kind: "HUMAN", actor_membership_id: change.actor.id, actor_user_id: change.actor.userId,
       correlation_id: change.correlationId, action: change.action, target_type: change.targetType, target_id: change.targetId,
       previous_state: change.previousState === null ? null : JSON.stringify(change.previousState),
-      new_state: JSON.stringify(change.newState) }).execute();
+      new_state: JSON.stringify(change.newState) })).execute();
   }
 }
 
 class PostgresOrganizationTransaction implements OrganizationTransaction {
   private readonly trx: Transaction<Database>;
-  constructor(trx: Transaction<Database>) { this.trx = trx; }
+  private readonly userId: string;
+  private readonly createdOrganizations = new Set<string>();
+  private creatorLocked = false;
+  constructor(trx: Transaction<Database>, userId: string) { this.trx = trx; this.userId = userId; }
 
-  async listForUser(userId: string, page: PageInput) {
+  async listForUser(page: PageInput) {
     // Discovery is an identity boundary, scoped to the authenticated user before pagination.
     let query = this.trx.selectFrom("memberships as m").innerJoin("organizations as o", "o.id", "m.organization_id")
       .select(["o.id", "o.name", "m.user_id as userId", "m.role", "m.status"])
-      .where("m.user_id", "=", userId).where("m.status", "=", "ACTIVE").where("o.status", "=", "ACTIVE");
+      .where("m.user_id", "=", this.userId).where("m.status", "=", "ACTIVE").where("o.status", "=", "ACTIVE");
     if (page.cursor) query = query.where("o.id", ">", page.cursor);
     const organizations = await query.orderBy("o.id").limit(page.limit + 1).execute();
     if (!organizations.length) return [];
@@ -84,6 +88,7 @@ class PostgresOrganizationTransaction implements OrganizationTransaction {
   }
 
   async findAuthorization(organizationId: string, userId: string) {
+    if (userId !== this.userId) return undefined;
     const rows = await this.trx.selectFrom("memberships as m")
       .leftJoin("role_permissions as rp", "rp.role", "m.role")
       .leftJoin("permissions as p", "p.id", "rp.permission_id")
@@ -97,14 +102,24 @@ class PostgresOrganizationTransaction implements OrganizationTransaction {
       capabilities: rows.flatMap((row) => row.code === null ? [] : [row.code]) };
   }
 
-  forOrganization(organizationId: string): OrganizationRepository {
-    return new ScopedOrganizationRepository(this.trx, organizationId);
+  async forOrganization(organizationId: string): Promise<OrganizationRepository> {
+    // Bootstrap is restricted to roots created here, after locking this user.
+    // Every existing tenant must prove an active membership before repository access.
+    if (!this.createdOrganizations.has(organizationId)) {
+      const member = await this.trx.selectFrom("memberships").select("organization_id")
+        .where(tenantScope(organizationId, "organization_id")).where("user_id", "=", this.userId)
+        .where("status", "=", "ACTIVE").executeTakeFirst();
+      if (!member) throw new OrganizationError(404, "Organization not found.");
+      organizationId = member.organization_id;
+    }
+    return new ScopedOrganizationRepository(this.trx, { organizationId, userId: this.userId });
   }
 
-  async lockCreator(userId: string): Promise<boolean> {
-    const user = await this.trx.selectFrom("users").select("id").where("id", "=", userId)
+  async lockCreator(): Promise<boolean> {
+    const user = await this.trx.selectFrom("users").select("id").where("id", "=", this.userId)
       .where("status", "=", "ACTIVE").forUpdate().executeTakeFirst();
-    return user !== undefined;
+    this.creatorLocked = user !== undefined;
+    return this.creatorLocked;
   }
 
   async findActiveUser(userId: string): Promise<boolean> {
@@ -113,20 +128,25 @@ class PostgresOrganizationTransaction implements OrganizationTransaction {
     return user !== undefined;
   }
 
-  createOrganization(input: CreateOrganizationInput) {
-    return this.trx.insertInto("organizations").values({ name: input.name, base_currency: input.baseCurrency,
+  async createOrganization(input: CreateOrganizationInput) {
+    if (!this.creatorLocked) throw new OrganizationError(401, "Unauthorized");
+    const organization = await this.trx.insertInto("organizations").values({ name: input.name, base_currency: input.baseCurrency,
       accounting_timezone: input.accountingTimezone, status: "ACTIVE" }).returning(ORGANIZATION_FIELDS).executeTakeFirstOrThrow();
+    this.createdOrganizations.add(organization.id);
+    return organization;
   }
 
-  findCreation(userId: string, key: string) {
+  findCreation(key: string) {
     return this.trx.selectFrom("idempotency_records")
       .select(["request_hash as requestHash", "organization_id as organizationId", "expires_at as expiresAt", "response_snapshot as response"])
-      .where("user_id", "=", userId).where("command_type", "=", CREATION_COMMAND).where("idempotency_key", "=", key)
+      .where("user_id", "=", this.userId).where("command_type", "=", CREATION_COMMAND).where("idempotency_key", "=", key)
       .executeTakeFirst();
   }
 
-  async saveCreation(userId: string, key: string, hash: string, result: CreationResult, expiresAt: Date): Promise<void> {
-    await this.trx.insertInto("idempotency_records").values({ user_id: userId, organization_id: result.organization.id,
+  async saveCreation(key: string, hash: string, result: CreationResult, expiresAt: Date): Promise<void> {
+    if (!this.createdOrganizations.has(result.organization.id) || result.membership.organizationId !== result.organization.id ||
+        result.membership.userId !== this.userId) throw new Error("Invalid organization creation scope.");
+    await this.trx.insertInto("idempotency_records").values({ user_id: this.userId, organization_id: result.organization.id,
       command_type: CREATION_COMMAND, idempotency_key: key, request_hash: hash,
       response_status: 201, response_snapshot: JSON.stringify(result), expires_at: expiresAt }).execute();
   }
@@ -136,10 +156,13 @@ export class PostgresOrganizationStore implements OrganizationStore {
   private readonly db: Kysely<Database>;
   constructor(db: Kysely<Database>) { this.db = db; }
 
-  async transaction<T>(work: (transaction: OrganizationTransaction) => Promise<T>): Promise<T> {
+  async transaction<T>(context: AuthenticatedContext, work: (transaction: OrganizationTransaction) => Promise<T>): Promise<T> {
+    // Capture identity before yielding; never retain a mutable request object.
+    const userId = context.userId;
+    if (!userId.trim()) throw new OrganizationError(401, "Unauthorized");
     try {
       return await this.db.transaction().setIsolationLevel("read committed")
-        .execute((trx) => work(new PostgresOrganizationTransaction(trx)));
+        .execute((trx) => work(new PostgresOrganizationTransaction(trx, userId)));
     } catch (error: unknown) {
       if (typeof error === "object" && error !== null && "code" in error) {
         if (error.code === "23505" && "constraint" in error && error.constraint === "memberships_organization_user_unique") {
