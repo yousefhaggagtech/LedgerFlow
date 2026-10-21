@@ -6,17 +6,19 @@ import { sql } from "kysely";
 import { createDatabase } from "@ledgerflow/db";
 import { createMigrator } from "../../../../packages/db/dist/migrator.js";
 import { createApp } from "../../dist/app.js";
+import { createLogger } from "../../dist/infrastructure/logger.js";
 import { PostgresAuthStore } from "../../dist/infrastructure/auth-store.js";
 import { PostgresOrganizationStore } from "../../dist/infrastructure/organization-store.js";
 import { loadAuthConfig, SESSION_TTL_MS } from "../../dist/modules/auth/config.js";
 import { newSessionToken, sessionKey } from "../../dist/modules/auth/session.js";
 import { OrganizationService } from "../../dist/modules/organizations/service.js";
+import { observeAuthorization, waitForLockWaiters, within } from "../helpers/concurrency.mjs";
 
 const connectionString = process.env.TEST_DATABASE_URL;
 if (!connectionString) throw new Error("TEST_DATABASE_URL must point to a disposable PostgreSQL test database.");
 const settings = { name: "Organization Test", baseCurrency: "EGP", accountingTimezone: "Africa/Cairo" };
 
-test("organization management on PostgreSQL", async (t) => {
+test("organization management on PostgreSQL", { timeout: 60_000 }, async (t) => {
   const schema = `organizations_test_${randomUUID().replaceAll("-", "")}`;
   const admin = createDatabase(connectionString);
   const url = new URL(connectionString);
@@ -46,11 +48,13 @@ test("organization management on PostgreSQL", async (t) => {
       assert.equal((await authStore.findSessionUser(session, new Date())).id, user.id);
     });
 
-    server = createApp({ authStore, organizationStore, authConfig: config, checkDatabase: async () => {} }).listen(0, "127.0.0.1");
+    const diagnosticLines = [];
+    const logger = createLogger({ stderr: (line) => { diagnosticLines.push(line); } });
+    server = createApp({ authStore, organizationStore, authConfig: config, checkDatabase: async () => {}, logger }).listen(0, "127.0.0.1");
     await once(server, "listening");
     const endpoint = `http://127.0.0.1:${server.address().port}`;
     const request = (path, cookie, method = "GET", body, headers = {}) => fetch(`${endpoint}${path}`, {
-      method, headers: { "Content-Type": "application/json", ...(cookie ? { Cookie: cookie } : {}), ...headers },
+      method, signal: AbortSignal.timeout(5_000), headers: { "Content-Type": "application/json", ...(cookie ? { Cookie: cookie } : {}), ...headers },
       ...(body === undefined ? {} : { body: JSON.stringify(body) })
     });
     const user = async () => {
@@ -75,6 +79,18 @@ test("organization management on PostgreSQL", async (t) => {
     const membership = (organizationId, userId) => db.selectFrom("memberships").selectAll()
       .where("organization_id", "=", organizationId).where("user_id", "=", userId).executeTakeFirst();
     const audits = (organizationId) => db.selectFrom("audit_events").selectAll().where("organization_id", "=", organizationId).execute();
+    const contend = async (lock, start) => {
+      let pending;
+      try {
+        await db.transaction().execute(async (trx) => {
+          await lock(trx);
+          pending = start();
+          pending.catch(() => {});
+          await waitForLockWaiters(db, 2);
+        });
+        return await within(pending, "contending requests after lock release");
+      } finally { if (pending) await Promise.allSettled([pending]); }
+    };
 
     await t.test("all organization endpoints require authentication", async () => {
       const path = `/organizations/${randomUUID()}`;
@@ -160,7 +176,9 @@ test("organization management on PostgreSQL", async (t) => {
     await t.test("concurrent creation retries replay one result; payload and user scopes are enforced", async () => {
       const owner = await user();
       const key = randomUUID();
-      const responses = await Promise.all([create(owner, key), create(owner, key)]);
+      const responses = await contend(
+        (trx) => trx.selectFrom("users").select("id").where("id", "=", owner.id).forUpdate().execute(),
+        () => Promise.all([create(owner, key), create(owner, key)]));
       for (const response of responses) assert.equal(response.status, 201);
       const [first, second] = await Promise.all(responses.map((response) => response.json()));
       assert.deepEqual(first, second);
@@ -190,6 +208,30 @@ test("organization management on PostgreSQL", async (t) => {
       assert.equal((await create(owner, key)).status, 409);
       const records = await db.selectFrom("idempotency_records").select("id").where("user_id", "=", owner.id).execute();
       assert.equal(records.length, 1);
+    });
+
+    await t.test("contending different-payload and expired-key retries never create another organization", async () => {
+      const owner = await user();
+      const key = randomUUID();
+      const lockCreator = (trx) => trx.selectFrom("users").select("id").where("id", "=", owner.id).forUpdate().execute();
+      const responses = await contend(lockCreator,
+        () => Promise.all([create(owner, key), create(owner, key, { ...settings, name: "Different" })]));
+      assert.deepEqual(responses.map((response) => response.status).sort(), [201, 409]);
+      const result = await responses.find((response) => response.status === 201).json();
+      const state = async () => ({
+        roots: await db.selectFrom("organizations").select("id").where("id", "=", result.organization.id).execute(),
+        members: await db.selectFrom("memberships").selectAll().where("user_id", "=", owner.id).execute(),
+        audits: await audits(result.organization.id),
+        records: await db.selectFrom("idempotency_records").selectAll().where("user_id", "=", owner.id).execute()
+      });
+      const created = await state();
+      for (const rows of Object.values(created)) assert.equal(rows.length, 1);
+      await db.updateTable("idempotency_records").set({ created_at: new Date(Date.now() - 10_000), expires_at: new Date(Date.now() - 1_000) })
+        .where("user_id", "=", owner.id).where("idempotency_key", "=", key).execute();
+      const before = await state();
+      const expired = await contend(lockCreator, () => Promise.all([create(owner, key), create(owner, key)]));
+      assert.deepEqual(expired.map((response) => response.status), [409, 409]);
+      assert.deepEqual(await state(), before);
     });
 
     await t.test("Tenant Leak: absent and inaccessible tenants match; mutations never reach another tenant", async () => {
@@ -358,19 +400,10 @@ test("organization management on PostgreSQL", async (t) => {
       const target = await user();
       assert.equal((await f.add(f.owner, administrator, "ADMIN")).status, 201);
       const permission = await db.selectFrom("permissions").select("id").where("code", "=", "member:invite").executeTakeFirstOrThrow();
-      let observed;
-      const read = new Promise((resolve) => { observed = resolve; });
-      const watchedStore = { transaction: (context, work) => organizationStore.transaction(context, (transaction) => work(new Proxy(transaction, {
-        get(instance, key) {
-          if (key === "findAuthorization") return async (organizationId, userId) => {
-            const result = await instance.findAuthorization(organizationId, userId);
-            observed();
-            return result;
-          };
-          const value = Reflect.get(instance, key);
-          return typeof value === "function" ? value.bind(instance) : value;
-        }
-      }))) };
+      const read = Promise.withResolvers();
+      const watchedStore = observeAuthorization(organizationStore, (_organizationId, userId) => {
+        if (userId === administrator.id) read.resolve();
+      });
       let attempt;
       try {
         await db.transaction().execute(async (trx) => {
@@ -378,13 +411,15 @@ test("organization management on PostgreSQL", async (t) => {
           attempt = new OrganizationService(watchedStore).add(f.result.organization.id,
             { userId: administrator.id, correlationId: randomUUID() }, { userId: target.id, role: "VIEWER" });
           attempt.catch(() => {});
-          await read;
+          await within(read.promise, "initial authorization before revocation");
+          await waitForLockWaiters(db, 1);
           await trx.deleteFrom("role_permissions").where("role", "=", "ADMIN").where("permission_id", "=", permission.id).execute();
         });
-        await assert.rejects(attempt, { status: 403 });
+        await assert.rejects(within(attempt, "denial after capability revocation"), { code: "PERMISSION_DENIED" });
         assert.equal(await membership(f.result.organization.id, target.id), undefined);
         assert.equal((await audits(f.result.organization.id)).length, 2);
       } finally {
+        if (attempt) await Promise.allSettled([attempt]);
         await db.insertInto("role_permissions").values({ role: "ADMIN", permission_id: permission.id }).onConflict((c) => c.doNothing()).execute();
       }
     });
@@ -409,7 +444,9 @@ test("organization management on PostgreSQL", async (t) => {
       const f = await fixture();
       const second = await user();
       assert.equal((await f.add(f.owner, second, "OWNER")).status, 201);
-      const responses = await Promise.all([f.patch(f.owner, f.owner, "ADMIN"), f.patch(second, second, "ADMIN")]);
+      const responses = await contend(
+        (trx) => trx.selectFrom("organizations").select("id").where("id", "=", f.result.organization.id).forUpdate().execute(),
+        () => Promise.all([f.patch(f.owner, f.owner, "ADMIN"), f.patch(second, second, "ADMIN")]));
       assert.deepEqual(responses.map((response) => response.status).sort(), [200, 409]);
       const owners = await db.selectFrom("memberships").select("id").where("organization_id", "=", f.result.organization.id)
         .where("role", "=", "OWNER").where("status", "=", "ACTIVE").execute();
@@ -417,37 +454,42 @@ test("organization management on PostgreSQL", async (t) => {
       assert.equal((await audits(f.result.organization.id)).filter((row) => row.action === "MEMBER_ROLE_CHANGED").length, 1);
     });
 
+    await t.test("one of two active Owners can demote; the remaining Owner cannot, and denial adds no audit", async () => {
+      const f = await fixture();
+      const second = await user();
+      assert.equal((await f.add(f.owner, second, "OWNER")).status, 201);
+      assert.equal((await f.patch(f.owner, f.owner, "ADMIN")).status, 200);
+      const before = await audits(f.result.organization.id);
+      assert.equal((await f.patch(second, second, "ADMIN")).status, 409);
+      assert.equal((await membership(f.result.organization.id, second.id)).role, "OWNER");
+      assert.deepEqual(await audits(f.result.organization.id), before);
+    });
+
     await t.test("authorization is rechecked after waiting for the organization lock", async () => {
       const f = await fixture();
       const administrator = await user();
       const target = await user();
       assert.equal((await f.add(f.owner, administrator, "ADMIN")).status, 201);
-      let observed;
-      const read = new Promise((resolve) => { observed = resolve; });
-      const watchedStore = { transaction: (context, work) => organizationStore.transaction(context, (transaction) => work(new Proxy(transaction, {
-        get(instance, key) {
-          if (key === "findAuthorization") return async (organizationId, id) => {
-            const result = await instance.findAuthorization(organizationId, id);
-            if (id === administrator.id) observed();
-            return result;
-          };
-          const value = Reflect.get(instance, key);
-          return typeof value === "function" ? value.bind(instance) : value;
-        }
-      }))) };
+      const read = Promise.withResolvers();
+      const watchedStore = observeAuthorization(organizationStore, (_organizationId, userId) => {
+        if (userId === administrator.id) read.resolve();
+      });
       const service = new OrganizationService(watchedStore);
       let attempt;
-      await db.transaction().execute(async (trx) => {
-        await trx.selectFrom("organizations").select("id").where("id", "=", f.result.organization.id).forUpdate().execute();
-        attempt = service.add(f.result.organization.id, { userId: administrator.id, correlationId: randomUUID() }, { userId: target.id, role: "VIEWER" });
-        // Attach a rejection handler immediately; the result is asserted after releasing the lock.
-        attempt.catch(() => {});
-        await read;
-        await trx.updateTable("memberships").set({ role: "VIEWER" }).where("organization_id", "=", f.result.organization.id)
-          .where("user_id", "=", administrator.id).execute();
-      });
-      await assert.rejects(attempt, { status: 403 });
-      assert.equal(await membership(f.result.organization.id, target.id), undefined);
+      try {
+        await db.transaction().execute(async (trx) => {
+          await trx.selectFrom("organizations").select("id").where("id", "=", f.result.organization.id).forUpdate().execute();
+          attempt = service.add(f.result.organization.id, { userId: administrator.id, correlationId: randomUUID() }, { userId: target.id, role: "VIEWER" });
+          attempt.catch(() => {});
+          await within(read.promise, "initial authorization before actor demotion");
+          await waitForLockWaiters(db, 1);
+          await trx.updateTable("memberships").set({ role: "VIEWER" }).where("organization_id", "=", f.result.organization.id)
+            .where("user_id", "=", administrator.id).execute();
+        });
+        await assert.rejects(within(attempt, "denial after actor demotion"), { code: "PERMISSION_DENIED" });
+        assert.equal(await membership(f.result.organization.id, target.id), undefined);
+        assert.equal((await audits(f.result.organization.id)).length, 2);
+      } finally { if (attempt) await Promise.allSettled([attempt]); }
     });
 
     await t.test("each mutation rolls back fully when its audit insert fails", async () => {
@@ -461,10 +503,24 @@ test("organization management on PostgreSQL", async (t) => {
         const auditCount = (await audits(f.result.organization.id)).length;
         await sql`ALTER TABLE audit_events ADD CONSTRAINT test_audit_failure CHECK (action <> ${sql.lit(action)}) NOT VALID`.execute(db);
         try {
+          const logCount = diagnosticLines.length;
           const response = action === "ORGANIZATION_CREATED" ? await create(f.owner, key)
             : action === "MEMBER_ADDED" ? await f.add(f.owner, target, "VIEWER") : await f.patch(f.owner, target, "ACCOUNTANT");
           assert.equal(response.status, 503);
           assert.deepEqual(await response.json(), { error: "Service is unavailable." });
+          assert.equal(diagnosticLines.length, logCount + 1);
+          const line = diagnosticLines[logCount];
+          const event = JSON.parse(line);
+          assert.equal(event.event, "api_request_failed");
+          assert.equal(event.level, "error");
+          assert.equal(event.statusCode, 503);
+          assert.equal(event.errorCategory, "DATABASE_FAILURE");
+          assert.equal(event.requestId, response.headers.get("x-request-id"));
+          assert.equal(event.route, action === "ORGANIZATION_CREATED" ? "/organizations"
+            : action === "MEMBER_ADDED" ? "/organizations/:id/members" : "/organizations/:id/members/:userId");
+          for (const secret of [key, f.owner.id, target.id, settings.name, "test_audit_failure", "INSERT", connectionString]) {
+            assert.ok(!line.includes(secret));
+          }
           assert.deepEqual(await membership(f.result.organization.id, target.id), before);
           assert.equal((await audits(f.result.organization.id)).length, auditCount);
           assert.deepEqual(await db.selectFrom("organizations").select(db.fn.countAll().as("count")).executeTakeFirstOrThrow(), orgCount);
@@ -473,6 +529,32 @@ test("organization management on PostgreSQL", async (t) => {
         } finally { await db.schema.alterTable("audit_events").dropConstraint("test_audit_failure").execute(); }
         if (action === "ORGANIZATION_CREATED") assert.equal((await create(f.owner, key)).status, 201);
       }
+    });
+
+    await t.test("broken diagnostic transport preserves committed creation/replay and audit correlation", async () => {
+      const brokenLogger = createLogger({ stderr: () => { throw new Error("OUTPUT_FAILURE"); } });
+      const isolated = createApp({ authStore, organizationStore, authConfig: config, checkDatabase: async () => {}, logger: brokenLogger }).listen(0, "127.0.0.1");
+      await once(isolated, "listening");
+      try {
+        const owner = await user();
+        const key = randomUUID();
+        const spoof = randomUUID();
+        const send = () => fetch(`http://127.0.0.1:${isolated.address().port}/organizations`, {
+          method: "POST", signal: AbortSignal.timeout(5_000), headers: { "Content-Type": "application/json", Cookie: owner.cookie,
+            "Idempotency-Key": key, "X-Request-Id": spoof }, body: JSON.stringify(settings)
+        });
+        const created = await send();
+        assert.equal(created.status, 201);
+        const body = await created.json();
+        assert.notEqual(created.headers.get("x-request-id"), spoof);
+        const replay = await send();
+        assert.equal(replay.status, 201);
+        assert.deepEqual(await replay.json(), body);
+        assert.notEqual(replay.headers.get("x-request-id"), created.headers.get("x-request-id"));
+        const events = await audits(body.organization.id);
+        assert.equal(events.length, 1);
+        assert.equal(events[0].correlation_id, created.headers.get("x-request-id"));
+      } finally { await new Promise((resolve, reject) => isolated.close((error) => error ? reject(error) : resolve())); }
     });
 
     await t.test("role audit records contain the authenticated actor and scoped before/after states", async () => {

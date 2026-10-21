@@ -1,4 +1,4 @@
-import type { MembershipRole } from "@ledgerflow/db";
+import type { MembershipRole } from "@ledgerflow/shared";
 import { OrganizationError, type StoredMembership } from "./types.ts";
 
 // Structural assignment limits are domain invariants, independent of capability grants.
@@ -12,6 +12,6 @@ export function requireAssignment(actor: StoredMembership, role: MembershipRole,
   const allowed = ASSIGNABLE_ROLES[actor.role];
   if (!allowed.includes(role) || (target && (!allowed.includes(target.role) ||
       (actor.userId === target.userId && actor.role === "ADMIN")))) {
-    throw new OrganizationError(403, "Permission denied.");
+    throw new OrganizationError("PERMISSION_DENIED", "Permission denied.");
   }
 }

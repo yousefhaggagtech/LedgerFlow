@@ -1,5 +1,4 @@
-export const SESSION_TTL_MS = 24 * 60 * 60 * 1_000;
-export const SESSION_CLEANUP_INTERVAL_MS = 5 * 60 * 1_000;
+export { SESSION_TTL_MS, SESSION_CLEANUP_INTERVAL_MS } from "./session-policy.ts";
 export const LOGIN_WINDOW_MS = 15 * 60 * 1_000;
 export const LOGIN_ATTEMPT_LIMIT = 10;
 

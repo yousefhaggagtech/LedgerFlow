@@ -38,7 +38,7 @@ export class RequestCapabilityResolver {
 }
 
 export function requireCapability(capability: Capability, member: AuthorizedMembership | undefined): AuthorizedMembership {
-  if (!member || member.status !== "ACTIVE") throw new OrganizationError(404, "Organization not found.");
-  if (!member.capabilities.includes(capability)) throw new OrganizationError(403, "Permission denied.");
+  if (!member || member.status !== "ACTIVE") throw new OrganizationError("RESOURCE_NOT_FOUND", "Organization not found.");
+  if (!member.capabilities.includes(capability)) throw new OrganizationError("PERMISSION_DENIED", "Permission denied.");
   return member;
 }

@@ -1,6 +1,7 @@
 import type { Kysely, Transaction } from "kysely";
 import { BaseTenantRepository, tenantScope } from "./tenant-repository.ts";
-import type { Database, MembershipRole } from "@ledgerflow/db";
+import type { Database } from "@ledgerflow/db";
+import type { MembershipRole } from "@ledgerflow/shared";
 import { OrganizationError, type AuditChange, type CreateOrganizationInput, type CreationResult,
   type StoredMembership, type AuthenticatedContext, type OrganizationRepository, type OrganizationStore, type OrganizationTransaction, type PageInput } from "../modules/organizations/types.ts";
 
@@ -10,10 +11,17 @@ const MEMBER_FIELDS = ["id", "user_id as userId", "organization_id as organizati
 
 class ScopedOrganizationRepository extends BaseTenantRepository<StoredMembership> implements OrganizationRepository {
   private readonly trx: Transaction<Database>;
+  private writeLocked: boolean;
 
-  constructor(trx: Transaction<Database>, context: AuthenticatedContext & { readonly organizationId: string }) {
+  constructor(trx: Transaction<Database>, context: AuthenticatedContext & { readonly organizationId: string }, bootstrap = false) {
     super(context);
     this.trx = trx;
+    // A root inserted by this transaction is already exclusively owned by it.
+    this.writeLocked = bootstrap;
+  }
+
+  private requireWriteLock(): void {
+    if (!this.writeLocked) throw new Error("Organization write lock is required.");
   }
 
   async findMembership(userId: string) {
@@ -22,9 +30,11 @@ class ScopedOrganizationRepository extends BaseTenantRepository<StoredMembership
     return member && this.ensureOrganization(member);
   }
 
-  organization(lock: "read" | "write") {
+  async organization(lock: "read" | "write") {
     const query = this.trx.selectFrom("organizations").select(ORGANIZATION_FIELDS).where(this.scope("organizations.id"));
-    return (lock === "write" ? query.forUpdate() : query.forShare()).executeTakeFirst();
+    const organization = await (lock === "write" ? query.forUpdate() : query.forShare()).executeTakeFirst();
+    if (organization && lock === "write") this.writeLocked = true;
+    return organization;
   }
 
   async listMembers(page: PageInput) {
@@ -35,25 +45,29 @@ class ScopedOrganizationRepository extends BaseTenantRepository<StoredMembership
   }
 
   async addMember(userId: string, role: MembershipRole) {
+    this.requireWriteLock();
     const member = await this.trx.insertInto("memberships").values(this.insertValues({
       user_id: userId, role, status: "ACTIVE" as const })).returning(MEMBER_FIELDS).executeTakeFirstOrThrow();
     return this.ensureOrganization(member);
   }
 
   async changeRole(userId: string, role: MembershipRole) {
+    this.requireWriteLock();
     const member = await this.update(this.trx.updateTable("memberships")).set({ role, updated_at: new Date() })
       .where("user_id", "=", userId).returning(MEMBER_FIELDS).executeTakeFirst();
-    if (!member) throw new OrganizationError(404, "Membership not found.");
+    if (!member) throw new OrganizationError("RESOURCE_NOT_FOUND", "Membership not found.");
     return this.ensureOrganization(member);
   }
 
   async hasOtherActiveOwner(userId: string): Promise<boolean> {
+    this.requireWriteLock();
     const owner = await this.find(this.trx.selectFrom("memberships")).select("id")
       .where("role", "=", "OWNER").where("status", "=", "ACTIVE").where("user_id", "!=", userId).limit(1).executeTakeFirst();
     return owner !== undefined;
   }
 
   async audit(change: AuditChange): Promise<void> {
+    this.requireWriteLock();
     this.ensureOrganization(change.actor);
     if (change.actor.userId !== this.actorUserId) throw new Error("Audit actor does not match the authenticated user.");
     await this.trx.insertInto("audit_events").values(this.insertValues({
@@ -109,10 +123,10 @@ class PostgresOrganizationTransaction implements OrganizationTransaction {
       const member = await this.trx.selectFrom("memberships").select("organization_id")
         .where(tenantScope(organizationId, "organization_id")).where("user_id", "=", this.userId)
         .where("status", "=", "ACTIVE").executeTakeFirst();
-      if (!member) throw new OrganizationError(404, "Organization not found.");
+      if (!member) throw new OrganizationError("RESOURCE_NOT_FOUND", "Organization not found.");
       organizationId = member.organization_id;
     }
-    return new ScopedOrganizationRepository(this.trx, { organizationId, userId: this.userId });
+    return new ScopedOrganizationRepository(this.trx, { organizationId, userId: this.userId }, this.createdOrganizations.has(organizationId));
   }
 
   async lockCreator(): Promise<boolean> {
@@ -129,7 +143,7 @@ class PostgresOrganizationTransaction implements OrganizationTransaction {
   }
 
   async createOrganization(input: CreateOrganizationInput) {
-    if (!this.creatorLocked) throw new OrganizationError(401, "Unauthorized");
+    if (!this.creatorLocked) throw new OrganizationError("UNAUTHENTICATED", "Unauthorized");
     const organization = await this.trx.insertInto("organizations").values({ name: input.name, base_currency: input.baseCurrency,
       accounting_timezone: input.accountingTimezone, status: "ACTIVE" }).returning(ORGANIZATION_FIELDS).executeTakeFirstOrThrow();
     this.createdOrganizations.add(organization.id);
@@ -159,17 +173,17 @@ export class PostgresOrganizationStore implements OrganizationStore {
   async transaction<T>(context: AuthenticatedContext, work: (transaction: OrganizationTransaction) => Promise<T>): Promise<T> {
     // Capture identity before yielding; never retain a mutable request object.
     const userId = context.userId;
-    if (!userId.trim()) throw new OrganizationError(401, "Unauthorized");
+    if (!userId.trim()) throw new OrganizationError("UNAUTHENTICATED", "Unauthorized");
     try {
       return await this.db.transaction().setIsolationLevel("read committed")
         .execute((trx) => work(new PostgresOrganizationTransaction(trx, userId)));
     } catch (error: unknown) {
       if (typeof error === "object" && error !== null && "code" in error) {
         if (error.code === "23505" && "constraint" in error && error.constraint === "memberships_organization_user_unique") {
-          throw new OrganizationError(409, "Membership already exists.");
+          throw new OrganizationError("BUSINESS_CONFLICT", "Membership already exists.");
         }
         if (error.code === "40001" || error.code === "40P01") {
-          throw new OrganizationError(409, "Concurrent update conflict. Retry the request.");
+          throw new OrganizationError("CONCURRENT_CONFLICT", "Concurrent update conflict. Retry the request.");
         }
       }
       throw error;

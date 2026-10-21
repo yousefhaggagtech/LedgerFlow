@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { MembershipRole } from "@ledgerflow/db";
+import type { MembershipRole } from "@ledgerflow/shared";
 import { requireAssignment } from "./policy.ts";
 import { RequestCapabilityResolver, requireCapability, type Capability } from "./capabilities.ts";
 import { isCreationResult } from "./validation.ts";
@@ -16,7 +16,7 @@ async function tenantAccess(transaction: OrganizationTransaction, organizationId
   requireCapability(capability, await resolver.resolve(organizationId, userId));
   const repository = await transaction.forOrganization(organizationId);
   const organization = await repository.organization(lock);
-  if (!organization) throw new OrganizationError(404, "Organization not found.");
+  if (!organization) throw new OrganizationError("RESOURCE_NOT_FOUND", "Organization not found.");
   // Waiting for a lock may span a role change or grant revocation: discard the earlier snapshot.
   resolver.invalidate(organizationId, userId);
   const actor = requireCapability(capability, await resolver.resolve(organizationId, userId));
@@ -38,17 +38,17 @@ export class OrganizationService {
     })).digest("hex");
     return this.store.transaction(actor, async (transaction) => {
       // The global user row serializes bootstrap retries before a tenant exists.
-      if (!await transaction.lockCreator()) throw new OrganizationError(401, "Unauthorized");
+      if (!await transaction.lockCreator()) throw new OrganizationError("UNAUTHENTICATED", "Unauthorized");
       const existing = await transaction.findCreation(key);
       if (existing) {
-        if (existing.requestHash !== requestHash) throw new OrganizationError(409, "Idempotency key was used with a different request.");
-        if (existing.expiresAt <= this.now()) throw new OrganizationError(409, "Idempotency key has expired. Check the existing organization before retrying.");
+        if (existing.requestHash !== requestHash) throw new OrganizationError("BUSINESS_CONFLICT", "Idempotency key was used with a different request.");
+        if (existing.expiresAt <= this.now()) throw new OrganizationError("BUSINESS_CONFLICT", "Idempotency key has expired. Check the existing organization before retrying.");
         const repository = await transaction.forOrganization(existing.organizationId);
         const member = await repository.findMembership(actor.userId);
-        if (!member || member.status !== "ACTIVE") throw new OrganizationError(404, "Organization not found.");
+        if (!member || member.status !== "ACTIVE") throw new OrganizationError("RESOURCE_NOT_FOUND", "Organization not found.");
         await repository.organization("read");
         const current = await repository.findMembership(actor.userId);
-        if (!current || current.status !== "ACTIVE") throw new OrganizationError(404, "Organization not found.");
+        if (!current || current.status !== "ACTIVE") throw new OrganizationError("RESOURCE_NOT_FOUND", "Organization not found.");
         if (!isCreationResult(existing.response)) throw new Error("Invalid stored creation response.");
         if (existing.response.organization.id !== existing.organizationId ||
             existing.response.membership.userId !== actor.userId) throw new Error("Invalid stored creation scope.");
@@ -98,9 +98,9 @@ export class OrganizationService {
     return this.store.transaction(actor, async (transaction) => {
       const { repository, actor: member } = await tenantAccess(transaction, organizationId, actor.userId, "member:invite", "write");
       requireAssignment(member, input.role);
-      if (await repository.findMembership(input.userId)) throw new OrganizationError(409, "Membership already exists.");
+      if (await repository.findMembership(input.userId)) throw new OrganizationError("BUSINESS_CONFLICT", "Membership already exists.");
       // This is the only global identity resolution; it returns no user profile/directory.
-      if (!await transaction.findActiveUser(input.userId)) throw new OrganizationError(404, "User is unavailable.");
+      if (!await transaction.findActiveUser(input.userId)) throw new OrganizationError("RESOURCE_NOT_FOUND", "User is unavailable.");
       const added = await repository.addMember(input.userId, input.role);
       await repository.audit({ actor: member, correlationId: actor.correlationId,
         action: "MEMBER_ADDED", targetType: "MEMBERSHIP", targetId: added.id,
@@ -113,7 +113,7 @@ export class OrganizationService {
     return this.store.transaction(actor, async (transaction) => {
       const { repository, actor: member } = await tenantAccess(transaction, organizationId, actor.userId, "member:edit", "write");
       const target = await repository.findMembership(userId);
-      if (!target) throw new OrganizationError(404, "Membership not found.");
+      if (!target) throw new OrganizationError("RESOURCE_NOT_FOUND", "Membership not found.");
       requireAssignment(member, role, target);
       if (target.role === role) return membershipDto(target);
       await this.retainOwner(repository, target, role);
@@ -128,7 +128,7 @@ export class OrganizationService {
   private async retainOwner(repository: OrganizationRepository, target: StoredMembership, role: MembershipRole): Promise<void> {
     if (target.status === "ACTIVE" && target.role === "OWNER" && role !== "OWNER" &&
         !await repository.hasOtherActiveOwner(target.userId)) {
-      throw new OrganizationError(409, "Organization must retain at least one active Owner.");
+      throw new OrganizationError("BUSINESS_CONFLICT", "Organization must retain at least one active Owner.");
     }
   }
 }

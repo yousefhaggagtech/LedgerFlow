@@ -29,12 +29,3 @@ export interface AuthStore {
   deleteSession(key: SessionKey): Promise<void>;
   deleteExpiredSessions(now: Date): Promise<void>;
 }
-
-declare global {
-  namespace Express {
-    interface Request {
-      user?: AuthUser;
-      userId?: string;
-    }
-  }
-}

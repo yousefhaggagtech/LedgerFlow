@@ -157,6 +157,12 @@ command idempotency or lease recovery is implemented.
 
 ### API Contract
 
+Phase 4 changes only internal ownership: shared owns role/status vocabulary,
+Organization errors carry application reasons, and Presentation owns the existing
+HTTP status/message and diagnostic-category mapping. Current authorization,
+locking, audit/idempotency, response contracts, and Phase 2 write guards remain
+unchanged. See [Phase 4 verification](../reviews/phase-4-clean-architecture.md).
+
 These endpoints are implemented in `apps/api/src/modules/organizations`. Paths use `:id` as the Organization identifier. JSON uses the domain's `organizationId` spelling; `organization_id` denotes the equivalent persistence tenant key, not a second field. Identifiers are validated at the boundary.
 
 | Method and path                            | Request                                                                             | Success                                                                                                     | Authorization                                                                            |
@@ -256,6 +262,32 @@ Role/permission mappings apply globally, while membership and resources remain
 tenant-scoped. Permission administration is trusted database work; this task
 introduces no management UI or grant-writing API. See the [database guide](../database.md#dynamic-capabilities--task-14)
 for schema, deployment, indexes, cache lifecycle, and rollback details.
+
+### Phase 2 — Mutation port preconditions
+
+`OrganizationService` remains the only production consumer of organization
+transaction/repository operations. Routes receive service methods; startup and
+`createApp` only wire the persistence dependency. The API boundary test checks
+resolved port calls (including aliases/bracket calls), restricts persistence
+capability references to service/adapter/wiring files, and detects literal
+organization-table writes outside the adapter. It is an architectural regression
+check, not protection against arbitrary SQL or deliberately erased types.
+
+For an existing tenant, the same repository instance must successfully await
+`organization("write")` before adding/changing members, querying other active
+Owners, or writing audit. Read locks, an unawaited lock request, another repository
+instance, and a previous transaction do not satisfy this runtime precondition.
+New roots created in the current creator-locked transaction are the bootstrap
+exception. This adds no database query or isolation-level change.
+
+The service still owns INV-01 active-Owner retention, INV-02 Strict Option A,
+INV-03 active tenant/capability authorization, INV-04 matching audit in the same
+transaction (no audit for no-ops/denials), and INV-05 post-lock authorization
+refresh. The adapter guard does not independently authorize a locked caller,
+enforce Owner count, or require a matching audit before arbitrary callbacks
+commit. New writers must enter through the service or undergo a separate review
+with the same lock/invariant/audit protocol. See the
+[Phase 2 implementation report](../reviews/phase-2-business-invariants.md).
 
 ### Remaining Deferred Work
 

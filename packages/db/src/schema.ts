@@ -1,9 +1,8 @@
 import type { ColumnType, Generated } from "kysely";
+import type { MembershipRole, MembershipStatus, OrganizationStatus } from "@ledgerflow/shared";
+export type { MembershipRole, MembershipStatus, OrganizationStatus } from "@ledgerflow/shared";
 
-export type OrganizationStatus = "ACTIVE" | "SUSPENDED";
 export type UserStatus = "ACTIVE" | "INACTIVE";
-export type MembershipStatus = "ACTIVE" | "INACTIVE";
-export type MembershipRole = "OWNER" | "ADMIN" | "ACCOUNTANT" | "FINANCE_MEMBER" | "VIEWER";
 
 interface Timestamps {
   created_at: Generated<Date>;

@@ -52,21 +52,21 @@ test("tenant repositories enforce authenticated scope on PostgreSQL", async (t) 
     await t.test("repository factories reject inaccessible tenants, missing tenants, and identity substitution", async () => {
       for (const organizationId of [b.organization.id, randomUUID()]) {
         await assert.rejects(store.transaction(alice, (transaction) => transaction.forOrganization(organizationId)),
-          { status: 404, message: "Organization not found." });
+          { code: "RESOURCE_NOT_FOUND", message: "Organization not found." });
       }
       await store.transaction(alice, async (transaction) => {
         assert.equal(await transaction.findAuthorization(b.organization.id, bob.userId), undefined);
         assert.deepEqual((await transaction.listForUser({ limit: 100 })).map((row) => row.id), [a.organization.id]);
       });
-      await assert.rejects(store.transaction({ userId: " " }, async () => {}), { status: 401 });
-      await assert.rejects(store.transaction(alice, (transaction) => transaction.createOrganization(settings)), { status: 401 });
+      await assert.rejects(store.transaction({ userId: " " }, async () => {}), { code: "UNAUTHENTICATED" });
+      await assert.rejects(store.transaction(alice, (transaction) => transaction.createOrganization(settings)), { code: "UNAUTHENTICATED" });
     });
 
     await t.test("transaction identity is captured before asynchronous work", async () => {
       const context = { userId: alice.userId };
       const pending = store.transaction(context, async (transaction) => {
         assert.deepEqual((await transaction.listForUser({ limit: 100 })).map((row) => row.id), [a.organization.id]);
-        await assert.rejects(transaction.forOrganization(b.organization.id), { status: 404 });
+        await assert.rejects(transaction.forOrganization(b.organization.id), { code: "RESOURCE_NOT_FOUND" });
       });
       context.userId = bob.userId;
       await pending;
@@ -78,7 +78,7 @@ test("tenant repositories enforce authenticated scope on PostgreSQL", async (t) 
         await store.transaction(actor, async (transaction) => {
           const repository = await transaction.forOrganization(own.organization.id);
           assert.equal((await repository.organization("read")).id, own.organization.id);
-          await assert.rejects(transaction.forOrganization(other.organization.id), { status: 404 });
+          await assert.rejects(transaction.forOrganization(other.organization.id), { code: "RESOURCE_NOT_FOUND" });
         });
       }));
     });
@@ -87,7 +87,8 @@ test("tenant repositories enforce authenticated scope on PostgreSQL", async (t) 
       await store.transaction(alice, async (transaction) => {
         const repository = await transaction.forOrganization(a.organization.id);
         assert.equal(await repository.findMembership(bob.userId), undefined);
-        await assert.rejects(repository.changeRole(bob.userId, "ADMIN"), { status: 404, message: "Membership not found." });
+        await repository.organization("write");
+        await assert.rejects(repository.changeRole(bob.userId, "ADMIN"), { code: "RESOURCE_NOT_FOUND", message: "Membership not found." });
       });
       assert.equal((await db.selectFrom("memberships").select("role").where("organization_id", "=", b.organization.id)
         .where("user_id", "=", bob.userId).executeTakeFirstOrThrow()).role, "OWNER");
@@ -105,6 +106,7 @@ test("tenant repositories enforce authenticated scope on PostgreSQL", async (t) 
     await t.test("audits cannot substitute another actor, even one with a valid membership", async () => {
       await store.transaction(alice, async (transaction) => {
         const repository = await transaction.forOrganization(a.organization.id);
+        await repository.organization("write");
         const member = await repository.findMembership(shared.userId);
         await assert.rejects(repository.audit({ actor: member, correlationId: randomUUID(), action: "MEMBER_ADDED",
           targetType: "MEMBERSHIP", targetId: member.id, previousState: null, newState: {} }), /authenticated user/);
@@ -114,7 +116,7 @@ test("tenant repositories enforce authenticated scope on PostgreSQL", async (t) 
     await t.test("inactive membership cannot acquire a scoped repository", async () => {
       await db.updateTable("memberships").set({ status: "INACTIVE" }).where("organization_id", "=", a.organization.id)
         .where("user_id", "=", shared.userId).execute();
-      await assert.rejects(store.transaction(shared, (transaction) => transaction.forOrganization(a.organization.id)), { status: 404 });
+      await assert.rejects(store.transaction(shared, (transaction) => transaction.forOrganization(a.organization.id)), { code: "RESOURCE_NOT_FOUND" });
     });
 
     await t.test("base select/update/delete/insert helpers isolate real rows", async () => {

@@ -1,15 +1,15 @@
-import type { MembershipRole } from "@ledgerflow/db";
+import { MEMBERSHIP_ROLES, MEMBERSHIP_STATUSES, ORGANIZATION_STATUSES, type MembershipRole } from "@ledgerflow/shared";
 import { OrganizationError, type CreateOrganizationInput, type CreationResult, type PageInput } from "./types.ts";
 
 export const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const ROLES: readonly string[] = ["OWNER", "ADMIN", "ACCOUNTANT", "FINANCE_MEMBER", "VIEWER"];
+const ROLES: readonly string[] = MEMBERSHIP_ROLES;
 const CURRENCIES = new Set(Intl.supportedValuesOf("currency"));
 const DEFAULT_PAGE_LIMIT = 25;
 const MAX_PAGE_LIMIT = 100;
 const MAX_NAME_LENGTH = 200;
 const MAX_TIMEZONE_LENGTH = 100;
 
-function invalid(message: string): never { throw new OrganizationError(400, message); }
+function invalid(message: string): never { throw new OrganizationError("VALIDATION_FAILED", message); }
 function object(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -87,7 +87,7 @@ export function isCreationResult(value: unknown): value is CreationResult {
   const { organization: org, membership: member } = value;
   return typeof org.id === "string" && UUID_PATTERN.test(org.id) && typeof org.name === "string" &&
     typeof org.baseCurrency === "string" && typeof org.accountingTimezone === "string" &&
-    (org.status === "ACTIVE" || org.status === "SUSPENDED") && member.organizationId === org.id &&
+    ORGANIZATION_STATUSES.some((status) => status === org.status) && member.organizationId === org.id &&
     typeof member.userId === "string" && UUID_PATTERN.test(member.userId) && isRole(member.role) &&
-    (member.status === "ACTIVE" || member.status === "INACTIVE");
+    MEMBERSHIP_STATUSES.some((status) => status === member.status);
 }

@@ -1,4 +1,4 @@
-import type { MembershipRole, MembershipStatus, OrganizationStatus } from "@ledgerflow/db";
+import type { MembershipRole, MembershipStatus, OrganizationStatus } from "@ledgerflow/shared";
 import type { CapabilitySource } from "./capabilities.ts";
 
 export interface Organization {
@@ -40,7 +40,15 @@ export interface AuditChange {
   newState: Membership | CreationResult;
 }
 
-// A repository instance carries its tenant; callers cannot omit a WHERE scope.
+/**
+ * Service-owned transactional port, not an alternate command API. Tenant scope
+ * is captured by infrastructure. For an existing root, await organization("write")
+ * on this instance before addMember/changeRole/hasOtherActiveOwner/audit.
+ * The service must refresh authorization after locking, validate assignment and
+ * Owner retention, and await the matching audit before returning. The adapter's
+ * lock guard does not enforce those policies or protect arbitrary SQL writers.
+ * Bootstrap is limited to roots created under lockCreator in this transaction.
+ */
 export interface OrganizationRepository {
   findMembership(userId: string): Promise<StoredMembership | undefined>;
   organization(lock: "read" | "write"): Promise<Organization | undefined>;
@@ -61,6 +69,7 @@ export interface CreationRecord {
 export interface OrganizationTransaction extends CapabilitySource {
   listForUser(page: PageInput): Promise<AccessibleOrganization[]>;
   forOrganization(organizationId: string): Promise<OrganizationRepository>;
+  /** Bootstrap lock precedes creation-key lookup and all new-root writes. */
   lockCreator(): Promise<boolean>;
   findActiveUser(userId: string): Promise<boolean>;
   createOrganization(input: CreateOrganizationInput): Promise<Organization>;
@@ -69,14 +78,22 @@ export interface OrganizationTransaction extends CapabilitySource {
 }
 
 export interface OrganizationStore {
+  /**
+   * OrganizationService owns this callback. Await every operation: resolve only
+   * after commit; a thrown callback must roll back and propagate its error.
+   * Never retain transaction/repository instances beyond the callback.
+   */
   transaction<T>(context: AuthenticatedContext, work: (transaction: OrganizationTransaction) => Promise<T>): Promise<T>;
 }
 
+export type OrganizationErrorCode = "VALIDATION_FAILED" | "UNAUTHENTICATED" | "PERMISSION_DENIED"
+  | "RESOURCE_NOT_FOUND" | "BUSINESS_CONFLICT" | "CONCURRENT_CONFLICT";
+
 export class OrganizationError extends Error {
-  readonly status: number;
-  constructor(status: number, message: string) {
+  readonly code: OrganizationErrorCode;
+  constructor(code: OrganizationErrorCode, message: string) {
     super(message);
-    this.status = status;
+    this.code = code;
   }
 }
 

@@ -48,14 +48,14 @@ test("explicit invalidation reloads permissions after the organization lock", as
   resolver.invalidate("organization", "user");
   const refreshed = await resolver.resolve("organization", "user");
   assert.notEqual(first, refreshed);
-  assert.throws(() => requireCapability("member:invite", refreshed), { status: 403 });
+  assert.throws(() => requireCapability("member:invite", refreshed), { code: "PERMISSION_DENIED" });
 });
 
 test("missing/inactive memberships and absent grants fail closed; grants work regardless of role name", async () => {
   const resolver = new RequestCapabilityResolver({ async findAuthorization() { return undefined; } });
-  assert.throws(() => requireCapability("org:read", undefined), { status: 404 });
-  assert.throws(() => requireCapability("org:read", { ...member, status: "INACTIVE", capabilities: ["org:read"] }), { status: 404 });
-  assert.throws(() => requireCapability("org:read", { ...member, role: "OWNER", capabilities: [] }), { status: 403 });
+  assert.throws(() => requireCapability("org:read", undefined), { code: "RESOURCE_NOT_FOUND" });
+  assert.throws(() => requireCapability("org:read", { ...member, status: "INACTIVE", capabilities: ["org:read"] }), { code: "RESOURCE_NOT_FOUND" });
+  assert.throws(() => requireCapability("org:read", { ...member, role: "OWNER", capabilities: [] }), { code: "PERMISSION_DENIED" });
   requireCapability("org:read", { ...member, capabilities: ["org:read"] });
   assert.equal(await resolver.resolve("organization", "user"), undefined);
 });
@@ -79,10 +79,10 @@ test("authorization rejects a source returning another tenant or user's membersh
 test("capability grants do not override structural Option A assignment limits", () => {
   const administrator = { ...member, role: "ADMIN", capabilities: ["member:invite", "member:edit"] };
   requireAssignment(administrator, "VIEWER");
-  assert.throws(() => requireAssignment(administrator, "OWNER"), { status: 403 });
-  assert.throws(() => requireAssignment(administrator, "ADMIN"), { status: 403 });
+  assert.throws(() => requireAssignment(administrator, "OWNER"), { code: "PERMISSION_DENIED" });
+  assert.throws(() => requireAssignment(administrator, "ADMIN"), { code: "PERMISSION_DENIED" });
   for (const role of ["OWNER", "ADMIN"]) {
-    assert.throws(() => requireAssignment(administrator, "VIEWER", { ...member, userId: "target", role }), { status: 403 });
+    assert.throws(() => requireAssignment(administrator, "VIEWER", { ...member, userId: "target", role }), { code: "PERMISSION_DENIED" });
   }
-  assert.throws(() => requireAssignment(member, "VIEWER"), { status: 403 });
+  assert.throws(() => requireAssignment(member, "VIEWER"), { code: "PERMISSION_DENIED" });
 });

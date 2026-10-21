@@ -175,6 +175,15 @@ test("PostgreSQL auth schema, persistence, and HTTP lifecycle", async (t) => {
           const result = await Promise.race([exited, delay(12_000, undefined, { ref: false }).then(() => { throw new Error("API shutdown timed out"); })]);
           assert.equal(result[0], 0, output);
           assert.doesNotMatch(output, /session_cleanup_failed|could not shut down|api_request_failed/);
+          assert.doesNotMatch(output, /api_start_failed|api_shutdown_failed|database_shutdown_failed/);
+          const events = output.trim().split(/\r?\n/).map((line) => JSON.parse(line));
+          assert.deepEqual(events.map((event) => event.event).sort(), ["api_started", "api_stopped"]);
+          for (const event of events) {
+            assert.equal(event.level, "info");
+            assert.ok(Number.isFinite(Date.parse(event.timestamp)));
+            assert.deepEqual(Object.keys(event).sort(), ["event", "level", "timestamp"]);
+          }
+          assert.ok(!output.includes(url.toString()));
         } finally {
           if (child.exitCode === null) { child.kill(); await exited; }
         }

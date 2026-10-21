@@ -5,6 +5,7 @@ import { PostgresAuthStore } from "./infrastructure/auth-store.ts";
 import { startSessionCleanup } from "./infrastructure/session-cleanup.ts";
 import { loadAuthConfig } from "./modules/auth/config.ts";
 import { PostgresOrganizationStore } from "./infrastructure/organization-store.ts";
+import { logger } from "./infrastructure/logger.ts";
 
 const portValue = process.env.API_PORT;
 const host = process.env.API_HOST;
@@ -27,8 +28,9 @@ const app = createApp({ authStore, authConfig, organizationStore: new PostgresOr
 const stopCleanup = startSessionCleanup(authStore);
 
 const server = app.listen(port, host);
+server.once("listening", () => { logger.log({ event: "api_started" }); });
 server.on("error", () => {
-  process.stderr.write("API server could not start. Check API_HOST and API_PORT.\n");
+  logger.log({ event: "api_start_failed", errorCategory: "INTERNAL_FAILURE" });
   process.exitCode = 1;
 });
 
@@ -38,17 +40,18 @@ function shutdown(): void {
   timeout.unref();
   server.close(async (error) => {
     if (error) {
-      process.stderr.write("API server could not shut down cleanly.\n");
+      logger.log({ event: "api_shutdown_failed", errorCategory: "INTERNAL_FAILURE" });
       process.exitCode = 1;
     }
     try {
       await stopCleanup();
       await db.destroy();
     } catch {
-      process.stderr.write("Database pool could not shut down cleanly.\n");
+      logger.log({ event: "database_shutdown_failed", errorCategory: "DATABASE_FAILURE" });
       process.exitCode = 1;
     } finally {
       clearTimeout(timeout);
+      if (!process.exitCode) logger.log({ event: "api_stopped" });
     }
   });
 }

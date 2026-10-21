@@ -3,6 +3,14 @@
 `packages/db` owns PostgreSQL connection setup, Kysely schema types, migrations,
 and development fixtures. Business use cases remain in `apps/api`.
 
+Phase 4 moves the unchanged MembershipRole, MembershipStatus, and OrganizationStatus
+vocabulary to `@ledgerflow/shared`; DB schema types consume it and retain the
+existing compatible type exports. DB now declares its existing shared-workspace
+dependency; no external package, physical schema, seed, or migration changes.
+Run the root `npm run build` to build workspace prerequisites in dependency order;
+standalone DB compilation needs the shared declarations built first. No migration
+is required for this refactoring. See [Phase 4 verification](reviews/phase-4-clean-architecture.md).
+
 ## Schema contract
 
 - `organizations`: UUID primary key, required name, three uppercase currency
@@ -260,6 +268,15 @@ ROLLBACK;
 
 
 ## Tenant repository pattern - Task 1.5
+
+Phase 2 adds a repository-local write-lock precondition to the organization
+adapter and permanent callback/Owner/audit/final-idempotency rollback tests.
+No schema/migration/index changes are involved. Existing tenant predicates,
+composite constraints, READ COMMITTED isolation, pool limits, and lock order are
+unchanged. Guard state belongs to one repository in one transaction; no shared
+tenant/authorization cache is introduced. Service policies/audit pairing remain
+mandatory even after acquiring the lock. See the
+[Phase 2 evidence and limits](reviews/phase-2-business-invariants.md).
 
 `apps/api/src/infrastructure/tenant-repository.ts` supplies typed scoped query
 factories and returned-resource guards for OrganizationStore and future modules.

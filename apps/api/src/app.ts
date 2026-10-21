@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import express from "express";
 import cors from "cors";
 import cookieParser from "cookie-parser";
@@ -10,7 +9,12 @@ import { createAuthRouter } from "./modules/auth/routes.ts";
 import type { AuthStore } from "./modules/auth/types.ts";
 import { createOrganizationRouter } from "./modules/organizations/routes.ts";
 import { OrganizationService } from "./modules/organizations/service.ts";
-import { OrganizationError, type OrganizationStore } from "./modules/organizations/types.ts";
+import type { OrganizationStore } from "./modules/organizations/types.ts";
+import { logger as defaultLogger, type StructuredLogger } from "./infrastructure/logger.ts";
+import { correlateRequest, createErrorHandler, identifyRoute, logRequestFailure } from "./presentation/request-diagnostics.ts";
+import { createLogin } from "./modules/auth/login.ts";
+import { verifyPassword } from "./modules/auth/password.ts";
+import { issueSessionCredential } from "./infrastructure/session-credentials.ts";
 
 interface AppDependencies {
   authStore: AuthStore;
@@ -18,16 +22,13 @@ interface AppDependencies {
   checkDatabase: () => Promise<void>;
   now?: () => Date;
   organizationStore?: OrganizationStore;
+  logger?: StructuredLogger;
 }
 
-export function createApp({ authStore, authConfig, checkDatabase, now, organizationStore }: AppDependencies) {
+export function createApp({ authStore, authConfig, checkDatabase, now, organizationStore, logger = defaultLogger }: AppDependencies) {
   const app = express();
   app.disable("x-powered-by");
-  app.use("/organizations", (_request, response, next) => {
-    // Even parser/origin failures need the same correlation header as audited commands.
-    response.set("X-Request-Id", randomUUID());
-    next();
-  });
+  app.use(correlateRequest);
   // Forwarded IPs are deliberately untrusted until a deployment defines its proxy boundary.
   app.use(helmet(authConfig.production ? {} : { strictTransportSecurity: false }));
   app.use(cors({ credentials: true,
@@ -57,30 +58,23 @@ export function createApp({ authStore, authConfig, checkDatabase, now, organizat
   });
   app.use(express.json({ limit: "8kb" }));
   app.use(cookieParser());
-  app.get("/health", async (_request, response: express.Response<HealthResponse>) => {
-    const health = await getHealth(checkDatabase);
+  app.get("/health", identifyRoute("/health"), async (request, response: express.Response<HealthResponse>) => {
+    const health = await getHealth(async () => {
+      try { await checkDatabase(); }
+      catch (error: unknown) {
+        logRequestFailure(request, response, 503, "DATABASE_FAILURE", logger);
+        throw error;
+      }
+    });
     response.set("Cache-Control", "no-store");
     response.status(health.database === "UP" ? 200 : 503).json(health);
   });
-  app.use("/auth", createAuthRouter(authStore, authConfig, now));
+  const login = createLogin({ store: authStore, verifyPassword, issueSession: issueSessionCredential,
+    now: now ?? (() => new Date()) });
+  app.use("/auth", createAuthRouter(authStore, authConfig, login, now, logger));
   if (organizationStore) {
     app.use("/organizations", createOrganizationRouter(new OrganizationService(organizationStore, now), authStore, authConfig, now));
   }
-  const errorHandler: express.ErrorRequestHandler = (error: unknown, _request, response, _next) => {
-    if (response.headersSent) { _next(error); return; }
-    if (error instanceof OrganizationError) {
-      response.status(error.status).json({ error: error.message });
-      return;
-    }
-    const status = typeof error === "object" && error !== null && "status" in error ? error.status : undefined;
-    response.set("Cache-Control", "no-store");
-    if (status === 400 || status === 413) {
-      response.status(status).json({ error: status === 413 ? "Request body is too large." : "Invalid JSON body." });
-      return;
-    }
-    process.stderr.write('{"level":"error","event":"api_request_failed"}\n');
-    response.status(503).json({ error: "Service is unavailable." });
-  };
-  app.use(errorHandler);
+  app.use(createErrorHandler(logger));
   return app;
 }

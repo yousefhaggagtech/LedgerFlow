@@ -385,6 +385,16 @@ Web Frontend, API Application, Worker Process, PostgreSQL, Queue/Job infrastruct
 
 ### 4.2 Multi-Tenancy & Tenant Isolation
 
+Phase 2 hardens the existing organization write protocol without a new layer:
+the PostgreSQL repository requires its acquired root write lock for existing
+tenant mutations/Owner checks/audit; creator-locked new roots retain bootstrap
+access. Authorization refresh, Strict Option A, Owner retention, and matching
+audit orchestration remain in `OrganizationService`. A focused API architecture
+test rejects alternate production consumers of the mutation ports and known
+literal organization-table writes. These are runtime preconditions plus an
+application convention checked in tests, not universal SQL authorization. See
+[the mutation preconditions](features/organization-management.md#phase-2--mutation-port-preconditions).
+
 Layered enforcement; no single layer is sufficient:
 
 ```text
@@ -559,3 +569,45 @@ existing app shell and credentialed direct API calls through public
 NEXT_PUBLIC_API_URL. The API remains the authentication/authorization boundary;
 client capability hints grant no access. There is no new frontend proxy or
 state-management dependency. See the organization feature spec for contracts.
+
+### Implemented API diagnostics (Phase 3)
+
+Presentation middleware generates one canonical UUID per request before security
+middleware and exposes it through `X-Request-Id`. Trusted response-local context
+supplies both HTTP failure diagnostics and the existing Organization audit actor;
+client IDs are ignored. Presentation maps existing errors to bounded categories
+and safe route templates without changing response contracts. Infrastructure's
+small JSON writer uses explicit primitive allowlists and best-effort stdout/stderr
+output. Domain/application services gain no Express or logger dependency.
+
+Unexpected request failures emit one diagnostic event after transaction handling;
+diagnostics do not perform SQL or create business audit events. Successful audits
+remain in the existing mutation transaction. Routine 4xx outcomes stay quiet;
+malformed stored password hashes are exceptional warnings. No tracing framework,
+global mutable request context, schema change, or transaction change is introduced.
+See [Phase 3 verification](reviews/phase-3-observability.md) for evidence and limits.
+
+### Implemented inward contracts and architecture checks (Phase 4)
+
+`packages/shared/src/organizations.ts` owns the unchanged five-role and
+membership/organization status vocabulary. API policies/contracts and DB schema
+types consume it; DB keeps compatible type re-exports. DB depends on the existing
+shared workspace, which has no DB/API dependency. Historical enum migrations are
+unchanged. Root Turbo builds follow this package dependency order.
+
+Organization errors express application reasons. Presentation maps them to the
+existing statuses/messages and Phase 3 diagnostic categories; PostgreSQL adapters
+translate only the previously recognized conflicts. Services/policies contain no
+HTTP status policy. The extracted login use case receives its store, verifier,
+issuer, and clock at `createApp`; HTTP validation, cookies, and diagnostics stay
+in the router. Express augmentation is presentation-owned.
+
+The API unit gate now resolves imports, type imports/queries, re-exports, literal
+dynamic imports/require, aliases, and transitive workspace barrels to check inward
+dependencies and package cycles. Positive and negative synthetic fixtures execute
+in the TypeScript program. Presentation login persistence bypasses and concrete
+store construction are checked. Existing Organization mutation-boundary checks
+remain intact. Computed inner module loading is rejected; arbitrary runtime
+reflection/loading and deliberate SQL are not universally analyzed. These are
+development checks, not runtime authorization. See the
+[Phase 4 report](reviews/phase-4-clean-architecture.md) for exact rules and evidence.

@@ -11,6 +11,20 @@ Argon2id verification, and `authenticate` middleware. Infrastructure implements
 its `AuthStore` interface with parameterized Kysely queries. `packages/db` owns
 the additive `002_sessions` migration and schema types.
 
+Phase 4 separates the login workflow into `modules/auth/login.ts`. `createApp`
+wires the existing AuthStore, Argon2 verifier, session credential issuer, and clock
+once per app. The use case owns lookup, verification, ACTIVE eligibility, issuance,
+expiry, and atomic persistence/rotation through the store port. The router keeps
+validation, metadata extraction, throttling, cookies, generic response mapping,
+and correlated diagnostics. Password verification still runs for absent/inactive
+users. No extra lookup, verification, or transaction is added.
+
+`modules/auth/types.ts` contains only inward contracts; Request augmentation is
+in `presentation/express.d.ts`. Session lifetime/cleanup constants live in the
+framework-independent session policy, with compatible config re-exports. Token
+generation/hashing is an infrastructure adapter, retaining the existing session
+helper exports. See [Phase 4 verification](reviews/phase-4-clean-architecture.md).
+
 The table has `id UUID PRIMARY KEY`, `user_id UUID NOT NULL` referencing global
 users with restrictive update/delete rules, `token_hash TEXT NOT NULL`,
 `created_at TIMESTAMPTZ NOT NULL DEFAULT now()`, `expires_at TIMESTAMPTZ NOT NULL`,
@@ -78,7 +92,7 @@ host behind routing). Unrelated domains need a separately reviewed cookie/CSRF
 policy; do not silently switch to SameSite=None.
 
 Credentialed CORS permits only `WEB_ORIGIN`, GET/POST/PATCH/OPTIONS, Content-Type,
-and Idempotency-Key; X-Request-Id is exposed for organization request correlation.
+and Idempotency-Key; X-Request-Id is exposed for API request correlation.
 The browser must opt in to credentials for login, authenticated requests, and logout:
 
 ```javascript
@@ -131,6 +145,20 @@ It attaches typed `request.user` and `request.userId`. Membership/capability gua
 and centrally tenant-scoped repositories remain mandatory for tenant resources.
 
 ## Verification
+
+Each API request receives a fresh server-generated UUID in `X-Request-Id`, before
+CORS, origin checks, JSON parsing, or authentication. Client-supplied IDs are
+ignored. Unexpected request failures emit one bounded JSON diagnostic event with
+the same ID, a safe route template, method, status, and allowlisted category.
+Routine invalid credentials, permission denials, validation errors, and throttling
+remain quiet. An unexpected malformed stored password hash emits a warning while
+retaining dummy verification and the generic credential response.
+
+Logs exclude request bodies, credentials, cookies, tokens, hashes, identities,
+idempotency keys, raw errors, SQL, URLs, and query parameters. Diagnostic output
+is best effort; output failures do not change authentication responses. Cleanup
+and lifecycle events have process context rather than fabricated request IDs.
+See [Phase 3 evidence](reviews/phase-3-observability.md) for the schema and tests.
 
 ```powershell
 npm run test --workspace=@ledgerflow/api
