@@ -27,7 +27,8 @@ export function AddMemberDrawer({ access, disabled, onAdd }: { access: Organizat
     finally { setPending(false); }
   }
   return <Sheet open={open} onOpenChange={(value) => { if (!pending) { setOpen(value); setError(null); setFields({ userId: "", role: "" }); } }}>
-    <SheetTrigger asChild><Button disabled={disabled}>Add member</Button></SheetTrigger>
+    {access.capabilities.includes("member:invite") && assignableRoles(access.membership.role).length > 0 &&
+      <SheetTrigger asChild><Button disabled={disabled}>Add member</Button></SheetTrigger>}
     <SheetContent width="form" className="overflow-y-auto p-6" onEscapeKeyDown={(event) => { if (pending) event.preventDefault(); }} onPointerDownOutside={(event) => { if (pending) event.preventDefault(); }}>
       <SheetTitle className="pr-8 text-xl">Add member</SheetTitle><SheetDescription>Add an existing user directly to <strong className="break-words">{access.name}</strong>. No email invitation is sent.</SheetDescription>
       <form className="mt-4 space-y-5" onSubmit={submit} noValidate aria-busy={pending}>

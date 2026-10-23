@@ -1,5 +1,5 @@
 "use client";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Building2 } from "lucide-react";
 import { useIdentity } from "@/components/identity/identity-provider";
@@ -11,24 +11,28 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { ApiError } from "@/lib/api";
 import { isOrganization, type Organization } from "@/lib/identity";
 export default function OrganizationSettingsPage() {
-  const { organization: access, loadSession, request } = useIdentity();
+  const { organization: access, loadSession, refreshAccess, request } = useIdentity();
+  const organizationId = access?.id;
   const router = useRouter();
   const [organization, setOrganization] = useState<Organization | null>(null);
   const [pending, setPending] = useState(true);
   const [error, setError] = useState<unknown>(null);
+  const sequence = useRef(0);
   const load = useCallback(async () => {
+    const version = ++sequence.current;
     setPending(true); setOrganization(null); setError(null);
     try {
       await loadSession();
-      if (!access) { router.replace("/organizations"); return; }
+      if (!organizationId) { router.replace("/organizations"); return; }
+      await refreshAccess();
       // Direct navigation still calls the server when capability hints are absent.
-      const result = await request(`/organizations/${access.id}`, isOrganization);
-      if (result.id !== access.id) throw new ApiError(502, "Unexpected organization in settings response.");
-      setOrganization(result);
-    } catch (failure) { setError(failure); }
-    finally { setPending(false); }
-  }, [access, loadSession, request, router]);
-  useEffect(() => { void load(); }, [load]);
+      const result = await request(`/organizations/${organizationId}`, isOrganization);
+      if (result.id !== organizationId) throw new ApiError(502, "Unexpected organization in settings response.");
+      if (version === sequence.current) setOrganization(result);
+    } catch (failure) { if (version === sequence.current) setError(failure); }
+    finally { if (version === sequence.current) setPending(false); }
+  }, [organizationId, loadSession, refreshAccess, request, router]);
+  useEffect(() => { void load(); return () => { sequence.current++; }; }, [load]);
   return <div className="space-y-8">
     <div className="space-y-2"><p className="text-xs font-medium uppercase tracking-wide text-primary">Organization</p><h1 className="text-2xl font-semibold tracking-tight">Organization settings</h1><p className="text-muted-foreground">Your workspace details and team access.</p></div>
     <ApiAlert error={error} />{pending && <p role="status" className="rounded-lg border bg-card p-6">Loading organization settings...</p>}{error != null && <Button variant="outline" onClick={() => void load()}>Try again</Button>}

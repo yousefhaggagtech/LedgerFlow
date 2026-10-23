@@ -5,6 +5,7 @@ export interface User { id: string; email: string; fullName: string }
 export interface Membership { userId: string; organizationId: string; role: Role; status: "ACTIVE" | "INACTIVE" }
 export interface Organization { id: string; name: string; baseCurrency: string; accountingTimezone: string; status: "ACTIVE" | "SUSPENDED" }
 export interface OrganizationAccess { id: string; name: string; membership: Membership; capabilities: string[] }
+export interface AccessHints { membership: Membership; capabilities: string[] }
 export interface Page<T> { items: T[]; nextCursor: string | null }
 export const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 export function isObject(value: unknown): value is Record<string, unknown> { return typeof value === "object" && value !== null && !Array.isArray(value); }
@@ -23,6 +24,10 @@ export function isOrganization(value: unknown): value is Organization {
 export function isAccess(value: unknown): value is OrganizationAccess {
   return isObject(value) && isId(value.id) && typeof value.name === "string" && isMember(value.membership) &&
     value.membership.organizationId === value.id && Array.isArray(value.capabilities) && value.capabilities.every((code: unknown) => typeof code === "string");
+}
+export function isAccessHints(value: unknown): value is AccessHints {
+  return isObject(value) && isMember(value.membership) && value.membership.status === "ACTIVE" &&
+    Array.isArray(value.capabilities) && value.capabilities.every((code: unknown) => typeof code === "string");
 }
 export function isPage<T>(guard: (value: unknown) => value is T) {
   return (value: unknown): value is Page<T> => isObject(value) && Array.isArray(value.items) && value.items.every(guard) &&

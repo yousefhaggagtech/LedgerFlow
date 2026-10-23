@@ -145,6 +145,7 @@ try {
   await waitFor("document.querySelector('[role=dialog] [role=alert]')?.textContent.includes('Permission Denied')");
   await screenshot("permission-denied");
   await key("Escape", "Escape", 27); await waitFor("document.querySelector('[role=dialog]') === null");
+  assert.equal(await evaluate("Array.from(document.querySelectorAll('button')).some(button => button.textContent.trim() === 'Add member')"), false);
   summary.push("375px: no page overflow, drawer fits, Escape restores focus; live capability revocation produces clear 403 feedback");
   await fixture.expireOwner();
   await evaluate("location.reload()");

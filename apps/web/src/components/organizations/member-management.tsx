@@ -57,7 +57,7 @@ export function MemberManagement({ access }: { access: OrganizationAccess }) {
   const editableRoles = assignableRoles(access.membership.role);
   return <Card>
     <CardHeader className="flex flex-wrap items-start justify-between gap-4 sm:flex-row"><div className="space-y-2"><CardTitle><h2>Members</h2></CardTitle><CardDescription>Manage roles and access for {access.name}.</CardDescription></div>
-      {access.capabilities.includes("member:invite") && editableRoles.length > 0 && <AddMemberDrawer access={access} disabled={busy || denied || pending || !page} onAdd={(id, role) => mutate(id, role, "POST")} />}
+      <AddMemberDrawer access={access} disabled={busy || denied || pending || !page} onAdd={(id, role) => mutate(id, role, "POST")} />
     </CardHeader>
     <CardContent className="space-y-4">
       <ApiAlert error={error} /><p role="status" className="break-words text-sm text-muted-foreground">{notice}</p>
