@@ -3,15 +3,106 @@
 `packages/db` owns PostgreSQL connection setup, Kysely schema types, migrations,
 and development fixtures. Business use cases remain in `apps/api`.
 
-Phase 4 moves the unchanged MembershipRole, MembershipStatus, and OrganizationStatus
-vocabulary to `@ledgerflow/shared`; DB schema types consume it and retain the
-existing compatible type exports. DB now declares its existing shared-workspace
-dependency; no external package, physical schema, seed, or migration changes.
+`@ledgerflow/shared` owns the MembershipRole, MembershipStatus, and OrganizationStatus
+vocabulary; DB schema types consume it and retain compatible type exports.
+The DB package declares its shared-workspace dependency.
 Run the root `npm run build` to build workspace prerequisites in dependency order;
-standalone DB compilation needs the shared declarations built first. No migration
-is required for this refactoring. See [Phase 4 verification](reviews/phase-4-clean-architecture.md).
+standalone DB compilation needs the shared declarations built first.
 
 ## Schema contract
+
+### Idempotency snapshot retention (migration 006)
+
+`006_idempotency_tombstones` preserves completed rows and the permanent unique
+`(user_id, command_type, idempotency_key)` identity. COMPLETED requires a 2xx status,
+an object response and valid creator/tenant snapshot scope. EXPIRED requires both
+response columns to be SQL NULL; all other state/partial-response combinations
+are rejected. Creator membership and tenant FKs remain in force for both states.
+
+The replay window stays 24 hours. Startup and five-minute API cleanup batches
+compact at most 1000 eligible rows (expires_at <= now), with FOR UPDATE SKIP LOCKED.
+Only status/response columns change; rows/keys are never deleted or reassigned.
+A partial `(expires_at, id)` index on COMPLETED excludes tombstones from the hot
+scan. Snapshot storage is reduced; tombstone count still grows with command count.
+Failures emit a safe diagnostic and retry next interval; shutdown awaits cleanup.
+
+Apply the migration before deploying the API timer, then reapply runtime grants
+for the three cleanup columns. Existing completed writers remain compatible.
+The migration takes ordinary schema locks/constraint validation scans; size those
+operations on representative data before a shared deployment. Down locks the
+table and refuses if any EXPIRED row exists; it never drops keys or fabricates a
+response. Keep 006 when rolling back the API after compaction. Historical 001–005
+migrations and the approved migration-005 maintenance-window requirement remain
+unchanged. No production migration or representative-volume timing was performed.
+
+### Separate migration and runtime roles
+
+The API reads only `DATABASE_URL`. The migration CLI and development seed prefer
+`MIGRATION_DATABASE_URL`, then the legacy `MIGRATIONS_DATABASE_URL`, falling back
+to `DATABASE_URL` when unset/empty. Never use the owner URL as the API's `DATABASE_URL`. Migration
+pools use ten-minute deadlines; runtime pools keep three-second deadlines.
+
+For the existing local Compose database with application tables in `public`, run
+`npm run migrate --workspace=@ledgerflow/db`, then `npm run db:grants`. The latter
+loads `.env` literally (single-line values, optional quotes/comments; no variable
+or escape expansion), connects as `POSTGRES_USER` to `POSTGRES_DB` using the container's
+local socket authentication, and creates/updates the `RUNTIME_DB_USER` login with
+`RUNTIME_DB_PASSWORD`. It supplies all three SQL settings in the same psql session,
+rolls back provisioning/grants together on error, and verifies a real runtime TCP
+login. Elevated, member, or object-owning runtime roles are refused. The existing
+owner is untouched. Re-run after migrations/password changes; new tables require
+explicit table grants. The `pg_database_owner` ownership of `public` on PostgreSQL
+15+ is accepted only when the configured owner owns the current database.
+This local command revokes PUBLIC schema access and database CREATE/TEMPORARY;
+use it only for this dedicated development database. It does not invoke the
+dedicated-schema provisioning script described below.
+
+For a **dedicated database and new dedicated application schema**, trusted DB
+administration runs `packages/db/src/provision-roles.sql`. Supply these session
+settings using PGOPTIONS or parameterized `set_config` on the same connection:
+
+```sql
+SELECT set_config('ledgerflow.owner_role', 'ledgerflow_migrator', false),
+       set_config('ledgerflow.runtime_role', 'ledgerflow_runtime', false),
+       set_config('ledgerflow.schema', 'ledgerflow_app', false);
+-- In psql, after configuring a trusted administrative connection:
+\i packages/db/src/provision-roles.sql
+```
+
+New owner/runtime logins have no password. Set them with psql `\password` through
+trusted administration; scripts contain no credentials. Configure both connection
+URLs with the dedicated schema first in search_path (then public). Run migrations
+with the owner URL, then execute `runtime-grants.sql` as owner/administration with
+the same three session settings. Reapply that grants script after future migrations.
+Use ON_ERROR_STOP in psql so a failure stops the provisioning session.
+
+Both scripts are rerunnable and identifier-quoted. They refuse conflicting schema
+ownership or unsafe roles; no existing objects/data are transferred. Provisioning
+removes PUBLIC CREATE/TEMPORARY on this dedicated database and PUBLIC access to
+the application schema/tables. Do not run it against a shared database containing
+unrelated applications. Existing Compose credentials/volumes are unchanged; moving
+an existing deployment to these roles needs a separately reviewed ownership plan.
+
+Runtime grants follow actual store SQL: users SELECT; organizations SELECT/INSERT;
+memberships SELECT/INSERT and UPDATE only role/updated_at; sessions SELECT/INSERT/
+DELETE; idempotency SELECT/INSERT and UPDATE only status/response_status/response_snapshot;
+audit_events INSERT + SELECT only. No audit
+UPDATE, DELETE, TRUNCATE or ownership; the append-only trigger remains additional
+protection. Catalogs have **read-only catalog access; the runtime cannot escalate
+its own capabilities.** permissions/role_permissions permit SELECT only, no INSERT,
+UPDATE, DELETE, TRUNCATE, REFERENCES or TRIGGER. Capability administration belongs
+to the owner. Runtime has CONNECT and schema USAGE, no schema/database CREATE or
+TEMPORARY, role memberships, migration-table grants or default future-table grants.
+Sequence USAGE/SELECT grants are included (current IDs use UUID defaults).
+
+The DB permission suite requires TEST_DATABASE_URL plus
+TEST_MIGRATOR_DATABASE_URL and TEST_RUNTIME_DATABASE_URL: distinct unprivileged
+logins on the **same disposable database**. A bootstrap administrator precreates
+the latter roles; the test login must be able to create a schema owned by the
+migrator (fixture-only membership). Tests connect as the actual runtime login,
+verify session_user=current_user, run the provisioning/grants scripts twice, and
+assert allowed reads/writes and privilege-denied catalog/audit/DDL operations.
+No application test needs an administrative login or development credentials.
 
 - `organizations`: UUID primary key, required name, three uppercase currency
   letters, explicit nonblank accounting timezone, `organization_status`
@@ -269,14 +360,13 @@ ROLLBACK;
 
 ## Tenant repository pattern - Task 1.5
 
-Phase 2 adds a repository-local write-lock precondition to the organization
-adapter and permanent callback/Owner/audit/final-idempotency rollback tests.
+The organization adapter enforces a repository-local write-lock precondition,
+covered by callback/Owner/audit/final-idempotency rollback tests.
 No schema/migration/index changes are involved. Existing tenant predicates,
 composite constraints, READ COMMITTED isolation, pool limits, and lock order are
 unchanged. Guard state belongs to one repository in one transaction; no shared
 tenant/authorization cache is introduced. Service policies/audit pairing remain
-mandatory even after acquiring the lock. See the
-[Phase 2 evidence and limits](reviews/phase-2-business-invariants.md).
+mandatory even after acquiring the lock.
 
 `apps/api/src/infrastructure/tenant-repository.ts` supplies typed scoped query
 factories and returned-resource guards for OrganizationStore and future modules.
@@ -343,9 +433,12 @@ npm run migrate --workspace=@ledgerflow/db
 the stored generated column, and the transactional migration holds schema locks.
 This migration is not zero downtime; deploy during a maintenance window sized for
 the audit table, indexes, constraint validation, and temporary disk use. The current
-CLI inherits a three-second query/statement deadline; larger deployments require a
-separately reviewed migration-runner timeout configuration. No timeout is silently
-disabled by this change. The development database is not migrated by tests.
+CLI opens its own pool with ten-minute query and statement deadlines. Runtime API
+queries retain the three-second defaults; no timeout is disabled. Before the
+window, measure the migration on an isolated clone with representative audit
+volume and budget lock time, constraint/index work, and temporary disk headroom.
+All historical-target preflight counts below must be zero. The development
+database is not migrated by tests.
 
 Run these read-only preflight queries against the intended deployment schema.
 Each count must be zero. They return no row payloads:

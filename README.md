@@ -4,7 +4,7 @@ Financial operations for SMBs, with accounting under the hood.
 
 ![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?logo=typescript&logoColor=white) ![Next.js](https://img.shields.io/badge/Next.js-000000?logo=nextdotjs&logoColor=white) ![Node.js](https://img.shields.io/badge/Node.js-339933?logo=nodedotjs&logoColor=white) ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-4169E1?logo=postgresql&logoColor=white)
 
-> **Foundation-stage portfolio project.** The repository contains design documentation, a Turborepo scaffold, local Docker infrastructure, and a responsive UI foundation. Business capabilities below remain planned. See the [design tokens and app shell](docs/design-tokens.md) for implemented UI decisions and verification.
+> **Foundation-stage portfolio project.** Identity, sessions, organizations, authorization, and the responsive UI foundation are implemented. The financial capabilities below remain planned. See [current status](#status) and the [design tokens and app shell](docs/design-tokens.md).
 
 ## Overview
 
@@ -159,7 +159,7 @@ Accounting has a separate lifecycle: `NOT_POSTED → POSTED → REVERSED`. **`SU
 
 ## Tech stack
 
-Technologies from the architecture document; workspace dependency ranges are declared in the package manifests. The initial install will generate the lockfile.
+Technologies from the architecture document; workspace dependency ranges are declared in the package manifests. Use `npm ci` with the committed `package-lock.json` for reproducible installation.
 
 | Area          | Technology                   | Purpose                                                                      |
 | ------------- | ---------------------------- | ---------------------------------------------------------------------------- |
@@ -175,7 +175,7 @@ RabbitMQ and Redis are documented implementation choices; domain behavior depend
 
 ## Project structure
 
-**Backend layout under `apps/api/src/`, scaffolded from the architecture document.** Top-level workspaces are `apps/web`, `apps/api`, `packages/db`, and `packages/shared`. Feature directories are placeholders; shared cross-workspace primitives will live in `packages/shared`.
+**Backend layout under `apps/api/src/`.** Top-level workspaces are `apps/web`, `apps/api`, `packages/db`, and `packages/shared`. Authentication and organizations are implemented; financial feature directories remain placeholders. Shared identity/organization vocabulary and health contracts live in `packages/shared`.
 
 ```text
 src/
@@ -197,7 +197,7 @@ src/
 
 ## Getting started
 
-Task 0.1 supplies workspace manifests, strict TypeScript configuration, API/web entrypoints, and Docker Compose. See [local development](docs/04-local-development.md) for complete initialization commands, configuration notes, and manual acceptance checks. Installation and verification have not been executed.
+The repository includes workspace manifests, strict TypeScript configuration, API/web entrypoints, and Docker Compose. See [local development](docs/04-local-development.md) for initialization.
 
 ### Prerequisites
 
@@ -210,21 +210,26 @@ Task 0.1 supplies workspace manifests, strict TypeScript configuration, API/web 
 Run from the repository root after installing the prerequisites:
 
 ```powershell
-npm install
+npm ci
 if (!(Test-Path .env)) { Copy-Item .env.example .env }
 docker compose up -d --wait
+npm run migrate --workspace=@ledgerflow/db
+npm run db:grants
 npm run dev
 ```
 
 Web: http://localhost:3000 (System Status). API: http://localhost:4000/health.
+
 Add server-only `API_URL` from `.env.example` to an existing root `.env`.
 The page refreshes every five seconds and reports real database connectivity.
 See [walking skeleton checks](docs/05-walking-skeleton.md) for outage/recovery tests.
 Stop dev with Ctrl+C, then run `npm run lint`, `npm run typecheck`, and
 `npm run build`. The lint pipeline currently uses TypeScript diagnostics;
 no separate style linter is installed. Health mapping tests run with
-`npm run test --workspace=@ledgerflow/api` after building. The first install creates
-`package-lock.json`; review and commit it for reproducible `npm ci` installs.
+`npm run test --workspace=@ledgerflow/api` after building shared/DB dependencies.
+The committed `package-lock.json` is consumed by `npm ci`; do not regenerate it
+as part of a normal install. Real PostgreSQL suites require an explicitly
+disposable TEST_DATABASE_URL and separate fixture-role URLs; see the database guide.
 Identity/tenancy migrations and a development seed are available; see the
 [database guide](docs/database.md) for commands and constraint verification.
 Session authentication is available through login/logout and `/auth/me`; add
@@ -240,6 +245,29 @@ starting/building web; open `http://localhost:3000`. Selected organization conte
 is held in memory. Signup, organization-creation UI, workers, object storage, and
 external providers are deferred.
 The planned verification strategy covers domain unit tests, real-database integration tests for constraints and concurrency, provider contract tests, and end-to-end financial workflows. Retry duplication, overpayment races, tenant leakage, self-approval, and posting recovery are explicit test targets.
+
+### Local database roles
+
+Migrations use `MIGRATION_DATABASE_URL` (the existing `ledgerflow` owner); the API
+uses `DATABASE_URL` (`ledgerflow_app`, a limited login). The development seed uses
+the owner connection too, because creating users is deliberately unavailable to
+the runtime role. Credentials in `.env.example` are **local development only**.
+
+After starting Docker and running migrations as shown above, `npm run db:grants`
+loads the root `.env`, creates the runtime login or updates its password, applies
+the grants in one transaction, then verifies access over a password-authenticated
+runtime connection. Re-run it after every migration or runtime password change;
+keep `DATABASE_URL` credentials in sync with `RUNTIME_DB_USER`/`RUNTIME_DB_PASSWORD`
+(URL-encode special characters in URLs). Restart the API after changing its URL.
+The command requires Windows PowerShell and the local Compose Postgres container.
+
+The command targets the verified `public` application schema in this dedicated
+development database. It revokes PUBLIC schema access and database CREATE/TEMPORARY,
+without changing the owner role. Table grants remain explicit: no automatic grants
+on future tables; sequences have default USAGE/SELECT privileges. New application
+tables need an explicit entry in `runtime-grants.sql`, then `npm run db:grants`.
+See [database roles](docs/database.md#separate-migration-and-runtime-roles) for the
+grant matrix and the separate dedicated-schema provisioning workflow.
 
 ## Documentation
 
@@ -270,15 +298,59 @@ V1 uses one base currency per organization, blocks overpayments and credit balan
 - Complete role-to-capability permission matrix.
 - Accounting treatment of transfers to external beneficiaries.
 
-Implementation remains ahead; no delivery dates or completed feature milestones are claimed. Advanced corrections, multi-currency, and broader reconciliation are deferred extensions rather than v1 commitments.
+Planned financial implementation remains ahead; no delivery dates or completed feature milestones are claimed. Advanced corrections, multi-currency, and broader reconciliation are deferred extensions rather than v1 commitments.
 
 ## Status
 
-**Current state: documented design with an unverified monorepo and infrastructure scaffold.**
+| State | Scope and evidence |
+| --- | --- |
+| Implemented | S1 identity/sessions, organization creation/discovery/settings/members, dynamic authorization, tenant boundaries, audit, retained idempotency keys, access-hint refresh and UI. Migrations 001–006 and unit, architecture, PostgreSQL and web tests exist. Local lint/typecheck/build, all suites and real Chromium identity acceptance passed. |
+| Implemented; verification pending | [CI quality-gates configuration](.github/workflows/ci.yml) awaits a successful GitHub-hosted run and manual branch protection. Deployment of role separation/deadlines, migration 005 on representative volume, production HTTPS/proxy, backup/restore, load/failover and multi-instance operation also need verification. Disposable-fixture results do not establish production readiness. |
+| Deferred | Financial/ledger/Money modules, workers, bank integrations, shared limiter storage and other planned v1 capabilities. |
 
-Present in the repository: design documents, engineering instructions, ignore configuration, MIT license, four npm workspaces, Turbo pipelines, strict TypeScript configs, minimal Next.js/Express entrypoints, a Kysely client factory, and Docker Compose. Business functionality, worker execution, schemas/migrations, Money, and automated tests are deferred.
+This describes implemented code and bounded verification, without delivery dates,
+completed roadmap milestone claims, a public demo, or unmeasured performance/coverage claims.
 
-The engineering mechanisms described here still require implementation and verification. There is no running demo or measured performance/coverage claim in this README.
+## CI pipeline
+
+Workflow: [.github/workflows/ci.yml](.github/workflows/ci.yml). Pull requests on all
+target branches, pushes to verified primary branch `main`, and manual runs execute
+the mandatory quality job. Any failed gate stops that job. Browser acceptance is
+an independent manual opt-in and is outside the main required check.
+
+```mermaid
+flowchart LR
+  Entry["Pull request / push main<br/>manual run"]
+  subgraph Quality["Quality gates — mandatory job"]
+    Install["Checkout + Node/npm<br/>Install: npm ci (frozen)"]
+    Build["Build"]
+    Safety["DB safety preflight"]
+    DB["DB tests"]
+    Integration["API integration"]
+    Unit["API unit + architecture"]
+    Web["Web tests"]
+    Types["Lint → Typecheck"]
+    Install --> Build --> Safety --> DB --> Integration --> Unit --> Web --> Types
+  end
+  subgraph BrowserJob["Identity browser — manual / non-blocking"]
+    Browser["Checkout / setup / npm ci<br/>Build / preflight / Chromium"]
+  end
+  PG[("PostgreSQL 16<br/>disposable / CI-only<br/>one service per job")]
+  Merge{"Required check<br/>(branch protection)"}
+  Entry --> Install
+  Entry -. "manual opt-in" .-> Browser
+  PG -.-> Safety
+  PG -.-> DB
+  PG -.-> Integration
+  PG -.-> Browser
+  Types -->|all pass| Merge
+```
+
+Merge blocking only works after branch protection is configured manually and the check has run successfully at least once.
+
+Not yet verified on GitHub-hosted runners.
+
+Keep this diagram synchronized with the workflow.
 
 ## License and author
 

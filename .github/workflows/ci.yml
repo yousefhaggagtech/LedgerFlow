@@ -1,0 +1,200 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      run_browser:
+        description: Run the optional identity browser acceptance job
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CI: 'true'
+  NEXT_TELEMETRY_DISABLED: '1'
+  TURBO_TELEMETRY_DISABLED: '1'
+  CI_POSTGRES_PORT: '5432'
+  CI_LOG_DIR: tmp/ci-logs
+  DATABASE_URL: postgresql://invalid:invalid@127.0.0.1:1/never_use_parent
+  TEST_DATABASE_URL: postgresql://ci_test:ci-test-disposable-only@127.0.0.1:5432/ledgerflow_ci
+  TEST_MIGRATOR_DATABASE_URL: postgresql://ci_migrator:ci-migrator-disposable-only@127.0.0.1:5432/ledgerflow_ci
+  TEST_RUNTIME_DATABASE_URL: postgresql://ci_runtime:ci-runtime-disposable-only@127.0.0.1:5432/ledgerflow_ci
+
+jobs:
+  quality:
+    name: Quality gates
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: ci_bootstrap
+          POSTGRES_PASSWORD: ci-bootstrap-disposable-only
+          POSTGRES_DB: postgres
+        ports:
+          - 127.0.0.1:5432:5432
+        options: >-
+          --health-cmd "pg_isready -U ci_bootstrap -d postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Setup Node 24
+        uses: actions/setup-node@v7
+        with:
+          node-version: '24.x'
+          package-manager-cache: false
+      - name: Provision and verify recorded npm
+        id: toolchain
+        shell: bash
+        run: |
+          target="$(node -p 'const p = require("./package.json").packageManager; if (!/^npm@11\.[0-9]+\.[0-9]+$/.test(p)) throw Error("Expected recorded npm 11"); p.slice(4)')"
+          if [ "$(npm --version)" != "$target" ]; then
+            npm install --global "npm@$target" --ignore-scripts --no-audit --no-fund
+          fi
+          node .github/scripts/check-toolchain.mjs
+      - name: Install with frozen lockfile
+        run: |
+          node .github/scripts/create-ci-env.mjs
+          node .github/scripts/run-gate.mjs install
+          node --test .github/tests/*.test.mjs
+      - name: Build
+        id: build
+        run: node .github/scripts/run-gate.mjs build
+      - name: Database safety preflight
+        id: database
+        env:
+          CI_BOOTSTRAP_PASSWORD: ci-bootstrap-disposable-only
+          CI_SERVICE_ID: ${{ job.services.postgres.id }}
+        run: |
+          service_address="$(docker inspect --format '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$CI_SERVICE_ID")"
+          printf 'CI_DB_SERVER_ADDRESS=%s\n' "$service_address" >> "$GITHUB_ENV"
+          CI_DB_SERVER_ADDRESS="$service_address" node .github/scripts/ci-database.mjs
+      - name: DB tests
+        id: db
+        run: |
+          node .github/scripts/run-gate.mjs db
+          node .github/scripts/ci-database.mjs cleanup
+      - name: API PostgreSQL integration
+        id: integration
+        run: |
+          node .github/scripts/run-gate.mjs integration
+          node .github/scripts/ci-database.mjs cleanup
+      - name: API unit and architecture
+        id: api
+        run: node .github/scripts/run-gate.mjs api
+      - name: Web tests
+        id: web
+        run: node .github/scripts/run-gate.mjs web
+      - name: Lint
+        id: lint
+        run: node .github/scripts/run-gate.mjs lint
+      - name: Typecheck
+        id: typecheck
+        run: node .github/scripts/run-gate.mjs typecheck
+      - name: Quality gate summary
+        if: always()
+        env:
+          GATE_BUILD: ${{ steps.build.outcome }}
+          GATE_DB: ${{ steps.db.outcome }}
+          GATE_INTEGRATION: ${{ steps.integration.outcome }}
+          GATE_API: ${{ steps.api.outcome }}
+          GATE_WEB: ${{ steps.web.outcome }}
+          GATE_LINT: ${{ steps.lint.outcome }}
+          GATE_TYPECHECK: ${{ steps.typecheck.outcome }}
+          CI_NODE_VERSION: ${{ steps.toolchain.outputs.node }}
+          CI_NPM_VERSION: ${{ steps.toolchain.outputs.npm }}
+          CI_POSTGRES_VERSION: ${{ steps.database.outputs.postgres }}
+        run: node .github/scripts/summary.mjs
+      - name: Upload scrubbed failure logs
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: quality-gate-failure-logs-${{ github.run_attempt }}
+          path: ${{ env.CI_LOG_DIR }}/*.log
+          retention-days: 7
+          if-no-files-found: ignore
+
+  identity-browser:
+    name: Identity browser (manual)
+    if: github.event_name == 'workflow_dispatch' && inputs.run_browser
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: ci_bootstrap
+          POSTGRES_PASSWORD: ci-bootstrap-disposable-only
+          POSTGRES_DB: postgres
+        ports:
+          - 127.0.0.1:5432:5432
+        options: >-
+          --health-cmd "pg_isready -U ci_bootstrap -d postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Setup Node 24
+        uses: actions/setup-node@v7
+        with:
+          node-version: '24.x'
+          package-manager-cache: false
+      - name: Provision and verify recorded npm
+        shell: bash
+        run: |
+          target="$(node -p 'const p = require("./package.json").packageManager; if (!/^npm@11\.[0-9]+\.[0-9]+$/.test(p)) throw Error("Expected recorded npm 11"); p.slice(4)')"
+          if [ "$(npm --version)" != "$target" ]; then
+            npm install --global "npm@$target" --ignore-scripts --no-audit --no-fund
+          fi
+          node .github/scripts/check-toolchain.mjs
+      - name: Install with frozen lockfile
+        run: |
+          node .github/scripts/create-ci-env.mjs
+          node .github/scripts/run-gate.mjs install
+          node --test .github/tests/*.test.mjs
+      - name: Build
+        run: node .github/scripts/run-gate.mjs build
+      - name: Database safety preflight
+        env:
+          CI_BOOTSTRAP_PASSWORD: ci-bootstrap-disposable-only
+          CI_SERVICE_ID: ${{ job.services.postgres.id }}
+        run: |
+          service_address="$(docker inspect --format '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$CI_SERVICE_ID")"
+          printf 'CI_DB_SERVER_ADDRESS=%s\n' "$service_address" >> "$GITHUB_ENV"
+          CI_DB_SERVER_ADDRESS="$service_address" node .github/scripts/ci-database.mjs
+      - name: Locate Chromium
+        run: |
+          browser="$(command -v google-chrome || command -v chromium)"
+          test -x "$browser"
+          printf 'UI_BROWSER_EXECUTABLE=%s\n' "$browser" >> "$GITHUB_ENV"
+      - name: Identity browser acceptance
+        run: |
+          node .github/scripts/run-gate.mjs browser
+          node .github/scripts/ci-database.mjs cleanup
+      - name: Upload scrubbed browser failure logs
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: identity-browser-failure-logs-${{ github.run_attempt }}
+          path: ${{ env.CI_LOG_DIR }}/*.log
+          retention-days: 7
+          if-no-files-found: ignore

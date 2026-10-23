@@ -1,5 +1,28 @@
 # Organization Management
 
+## Current access hints
+
+`GET /organizations/:id/access` is authenticated and returns
+`{ membership, capabilities }` using current grants in the existing tenant-scoped
+transaction. It requires active membership and an ACTIVE organization, then
+refreshes membership/grants after the root read lock. It returns the same
+`404 { error: "Organization not found." }` for absent, foreign, inactive or
+suspended access. No org:read grant is required to retrieve one's own hints;
+otherwise revoking that grant would prevent refreshing the restricted hint set.
+The response grants no authority and does not change capability enforcement on
+any existing endpoint.
+
+All direct business operations and creation replay also hide non-ACTIVE
+organizations with the same non-disclosing 404 as a missing organization. The
+named visibility policy is checked on locked roots and the tenant repository gate
+requires organization/membership ACTIVE; transaction-owned bootstrap is preserved.
+
+The web provider refreshes hints on settings load and once after a mutation 403,
+without retrying the mutation or polling. Selection/refresh generations discard
+old responses. Failed refreshes clear stale selection; 401 clears identity.
+Capabilities remain in React memory only, never session/cookie/server session
+state. The server remains authoritative for every operation.
+
 ## 1. Overview
 
 ### Goal
@@ -123,7 +146,10 @@ commands, and concurrency-safe Owner retention as described below.
   return `409`. An active membership is checked again before replay. Keys expire
   after 24 hours; retained expired keys return `409` and cannot create a second
   organization. Inspect the existing organization before deliberately starting
-  a new creation with a new key. No automatic cleanup/key reuse is introduced.
+  a new creation with a new key. Startup and five-minute cleanup batches compact
+  up to 1000 expired snapshots to EXPIRED tombstones, clearing response data but
+  retaining the row, creator/tenant scope and unique key permanently. Keys are
+  never reusable; this reduces payload growth, not the total tombstone count.
 - **Transactions and concurrency:** the service owns Kysely READ COMMITTED
   transactions. Creation locks the global creator User row before retry lookup,
   then commits Organization, Owner, audit, and completed idempotency record together.
@@ -157,11 +183,11 @@ command idempotency or lease recovery is implemented.
 
 ### API Contract
 
-Phase 4 changes only internal ownership: shared owns role/status vocabulary,
-Organization errors carry application reasons, and Presentation owns the existing
-HTTP status/message and diagnostic-category mapping. Current authorization,
-locking, audit/idempotency, response contracts, and Phase 2 write guards remain
-unchanged. See [Phase 4 verification](../reviews/phase-4-clean-architecture.md).
+The shared package owns role/status vocabulary. Organization errors carry
+application reasons, and Presentation owns HTTP status/message and
+diagnostic-category mapping. The application service owns authorization,
+locking, and audit/idempotency orchestration; the repository enforces write-lock
+preconditions.
 
 These endpoints are implemented in `apps/api/src/modules/organizations`. Paths use `:id` as the Organization identifier. JSON uses the domain's `organizationId` spelling; `organization_id` denotes the equivalent persistence tenant key, not a second field. Identifiers are validated at the boundary.
 
@@ -263,7 +289,7 @@ tenant-scoped. Permission administration is trusted database work; this task
 introduces no management UI or grant-writing API. See the [database guide](../database.md#dynamic-capabilities--task-14)
 for schema, deployment, indexes, cache lifecycle, and rollback details.
 
-### Phase 2 — Mutation port preconditions
+### Mutation port preconditions
 
 `OrganizationService` remains the only production consumer of organization
 transaction/repository operations. Routes receive service methods; startup and
@@ -280,14 +306,13 @@ instance, and a previous transaction do not satisfy this runtime precondition.
 New roots created in the current creator-locked transaction are the bootstrap
 exception. This adds no database query or isolation-level change.
 
-The service still owns INV-01 active-Owner retention, INV-02 Strict Option A,
-INV-03 active tenant/capability authorization, INV-04 matching audit in the same
-transaction (no audit for no-ops/denials), and INV-05 post-lock authorization
+The service still owns active-Owner retention, Strict Option A,
+active tenant/capability authorization, matching audit in the same
+transaction (no audit for no-ops/denials), and post-lock authorization
 refresh. The adapter guard does not independently authorize a locked caller,
 enforce Owner count, or require a matching audit before arbitrary callbacks
 commit. New writers must enter through the service or undergo a separate review
-with the same lock/invariant/audit protocol. See the
-[Phase 2 implementation report](../reviews/phase-2-business-invariants.md).
+with the same lock/invariant/audit protocol.
 
 ### Remaining Deferred Work
 
