@@ -8,7 +8,7 @@ import { createMigrator } from "../../../../packages/db/dist/migrator.js";
 import { createApp } from "../../dist/app.js";
 import { createLogger } from "../../dist/infrastructure/logger.js";
 import { PostgresAuthStore } from "../../dist/infrastructure/auth-store.js";
-import { PostgresOrganizationStore } from "../../dist/infrastructure/organization-store.js";
+import { expireCreationSnapshots, PostgresOrganizationStore } from "../../dist/infrastructure/organization-store.js";
 import { loadAuthConfig, SESSION_TTL_MS } from "../../dist/modules/auth/config.js";
 import { newSessionToken, sessionKey } from "../../dist/modules/auth/session.js";
 import { OrganizationService } from "../../dist/modules/organizations/service.js";
@@ -92,13 +92,75 @@ test("organization management on PostgreSQL", { timeout: 60_000 }, async (t) => 
       } finally { if (pending) await Promise.allSettled([pending]); }
     };
 
+    await t.test("suspended organizations are hidden from direct operations, discovery, and creation replay", async () => {
+      const owner = await user();
+      const target = await user();
+      const key = randomUUID();
+      const initial = await create(owner, key);
+      assert.equal(initial.status, 201);
+      const result = await initial.json();
+      const organizationId = result.organization.id;
+      const path = `/organizations/${organizationId}`;
+      const before = await audits(organizationId);
+      await db.updateTable("organizations").set({ status: "SUSPENDED" }).where("id", "=", organizationId).execute();
+      for (const [route, method, body] of [
+        [path, "GET"], [`${path}/access`, "GET"], [`${path}/members`, "GET"],
+        [`${path}/members`, "POST", { userId: target.id, role: "VIEWER" }],
+        [`${path}/members/${owner.id}`, "PATCH", { role: "ADMIN" }]
+      ]) {
+        const response = await request(route, owner.cookie, method, body);
+        assert.equal(response.status, 404, route);
+        assert.deepEqual(await response.json(), { error: "Organization not found." });
+      }
+      const discovery = await request("/organizations", owner.cookie);
+      assert.equal(discovery.status, 200);
+      assert.deepEqual((await discovery.json()).items, []);
+      const replay = await create(owner, key);
+      assert.equal(replay.status, 404);
+      assert.deepEqual(await replay.json(), { error: "Organization not found." });
+      assert.equal(await membership(organizationId, target.id), undefined);
+      assert.equal((await membership(organizationId, owner.id)).role, "OWNER");
+      assert.deepEqual(await audits(organizationId), before);
+    });
+
     await t.test("all organization endpoints require authentication", async () => {
       const path = `/organizations/${randomUUID()}`;
       for (const [route, method, body] of [
-        ["/organizations", "POST", settings], ["/organizations", "GET"], [path, "GET"], [`${path}/members`, "GET"],
+        ["/organizations", "POST", settings], ["/organizations", "GET"], [path, "GET"], [`${path}/access`, "GET"], [`${path}/members`, "GET"],
         [`${path}/members`, "POST", { userId: randomUUID(), role: "VIEWER" }],
         [`${path}/members/${randomUUID()}`, "PATCH", { role: "VIEWER" }]
       ]) assert.equal((await request(route, undefined, method, body)).status, 401);
+    });
+
+    await t.test("access hints use current grants and hide foreign, inactive and suspended tenants", async () => {
+      const f = await fixture();
+      const viewer = await user();
+      const outsider = await user();
+      assert.equal((await f.add(f.owner, viewer, "VIEWER")).status, 201);
+      const route = `${f.path}/access`;
+      const initial = await request(route, f.owner.cookie);
+      assert.equal(initial.status, 200);
+      const hints = await initial.json();
+      assert.equal(hints.membership.userId, f.owner.id);
+      assert.ok(hints.capabilities.includes("member:invite"));
+      const permission = await db.selectFrom("permissions").select("id").where("code", "=", "member:invite").executeTakeFirstOrThrow();
+      try {
+        await db.deleteFrom("role_permissions").where("role", "=", "OWNER").where("permission_id", "=", permission.id).execute();
+        const refreshed = await request(route, f.owner.cookie);
+        assert.equal(refreshed.status, 200);
+        assert.ok(!(await refreshed.json()).capabilities.includes("member:invite"));
+      } finally { await db.insertInto("role_permissions").values({ role: "OWNER", permission_id: permission.id }).execute(); }
+      const noGrants = await request(route, viewer.cookie);
+      assert.equal(noGrants.status, 200);
+      assert.deepEqual((await noGrants.json()).capabilities, []);
+      assert.equal((await request(route, outsider.cookie)).status, 404);
+      assert.equal((await request(`/organizations/${randomUUID()}/access`, f.owner.cookie)).status, 404);
+      await db.updateTable("memberships").set({ status: "INACTIVE" }).where("organization_id", "=", f.result.organization.id).where("user_id", "=", viewer.id).execute();
+      assert.equal((await request(route, viewer.cookie)).status, 404);
+      await db.updateTable("organizations").set({ status: "SUSPENDED" }).where("id", "=", f.result.organization.id).execute();
+      const hidden = await request(route, f.owner.cookie);
+      assert.equal(hidden.status, 404);
+      assert.deepEqual(await hidden.json(), { error: "Organization not found." });
     });
 
     await t.test("discovery exposes only the authenticated user's active organizations, with bounded pagination and live grants", async () => {
@@ -206,6 +268,13 @@ test("organization management on PostgreSQL", { timeout: 60_000 }, async (t) => 
       await db.updateTable("idempotency_records").set({ created_at: new Date(Date.now() - 10_000), expires_at: new Date(Date.now() - 1_000) })
         .where("user_id", "=", owner.id).where("command_type", "=", "organization:create").where("idempotency_key", "=", key).execute();
       assert.equal((await create(owner, key)).status, 409);
+      await expireCreationSnapshots(db, new Date());
+      const compacted = await db.selectFrom("idempotency_records").select(["status", "response_snapshot"])
+        .where("user_id", "=", owner.id).where("idempotency_key", "=", key).executeTakeFirstOrThrow();
+      assert.deepEqual(compacted, { status: "EXPIRED", response_snapshot: null });
+      const replay = await create(owner, key);
+      assert.equal(replay.status, 409);
+      assert.deepEqual(await replay.json(), { error: "Idempotency key has expired. Check the existing organization before retrying." });
       const records = await db.selectFrom("idempotency_records").select("id").where("user_id", "=", owner.id).execute();
       assert.equal(records.length, 1);
     });

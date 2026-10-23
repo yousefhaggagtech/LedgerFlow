@@ -54,6 +54,17 @@ test("concurrent requests have separate server-generated correlation IDs", async
   await Promise.all(responses.map((response) => response.arrayBuffer()));
 });
 
+test("unmatched routes return the JSON error contract with a server request ID", async (t) => {
+  const request = await fixture(t);
+  for (const path of ["/does-not-exist?secret=private", "/auth/unknown"]) {
+    const response = await request(path);
+    assert.equal(response.status, 404);
+    assert.match(response.headers.get("content-type"), /^application\/json/);
+    assert.deepEqual(await response.json(), { error: "Route not found." });
+    assert.match(response.headers.get("x-request-id"), uuid);
+  }
+});
+
 test("expected organization errors keep their status/body and correlation", async (t) => {
   const request = await fixture(t, { authStore: { async findSessionUser() { return { id: randomUUID() }; } },
     organizationStore: { async transaction() { throw new OrganizationError("RESOURCE_NOT_FOUND", "Organization not found."); } } });

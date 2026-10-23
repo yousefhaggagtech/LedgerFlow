@@ -3,6 +3,8 @@ import { randomUUID } from "node:crypto";
 import { once } from "node:events";
 import test from "node:test";
 import * as argon2 from "argon2";
+import express from "express";
+import cookieParser from "cookie-parser";
 import { createApp } from "../dist/app.js";
 import { loadAuthConfig, SESSION_TTL_MS } from "../dist/modules/auth/config.js";
 import { authenticate } from "../dist/modules/auth/session.js";
@@ -32,14 +34,15 @@ class MemoryAuthStore {
   }
 }
 
-async function fixture(t, authConfig = config) {
+async function fixture(t, authConfig = config, trustProxy) {
   const store = new MemoryAuthStore();
   let clock = new Date();
   const now = () => new Date(clock);
-  const app = createApp({ authStore: store, authConfig, checkDatabase: async () => {}, now });
-  app.get("/protected", authenticate(store, authConfig, now), (request, response) => {
+  const app = express();
+  app.get("/protected", cookieParser(), authenticate(store, authConfig, now), (request, response) => {
     response.json({ userId: request.userId, user: request.user });
   });
+  app.use(createApp({ authStore: store, authConfig, checkDatabase: async () => {}, now, trustProxy }));
   const server = app.listen(0, "127.0.0.1");
   await once(server, "listening");
   t.after(() => new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve())));
@@ -192,6 +195,34 @@ test("login attempts are rate-limited", async (t) => {
   const response = await login({});
   assert.equal(response.status, 429);
   assert.ok(response.headers.has("retry-after"));
+});
+
+test("successful logins leave the full failed-attempt budget available", async (t) => {
+  const { store, login } = await fixture(t);
+  for (let attempt = 0; attempt < 12; attempt++) {
+    const response = await login();
+    assert.equal(response.status, 200);
+    await response.arrayBuffer();
+  }
+  assert.equal([...store.sessions.values()][0].ipAddress, "127.0.0.1");
+  for (let attempt = 0; attempt < 10; attempt++) {
+    const response = await login({ email: "missing@example.com", password });
+    assert.equal(response.status, 401);
+    await response.arrayBuffer();
+  }
+  const limited = await login({ email: "missing@example.com", password });
+  assert.equal(limited.status, 429);
+  await limited.arrayBuffer();
+});
+
+test("explicit trusted proxy networks determine the IP stored in a login session", async (t) => {
+  const { request, store } = await fixture(t, config, ["127.0.0.1/32"]);
+  const response = await request("/auth/login", { method: "POST", headers: {
+    "Content-Type": "application/json", "X-Forwarded-For": "192.0.2.7"
+  }, body: JSON.stringify({ email: store.user.email, password }) });
+  assert.equal(response.status, 200);
+  await response.arrayBuffer();
+  assert.equal([...store.sessions.values()][0].ipAddress, "192.0.2.7");
 });
 
 test("store outages fail closed and do not report successful login or logout", async (t) => {
