@@ -78,7 +78,7 @@ flowchart LR
 
 ### 1.5 Module Structure and Dependency Rules
 
-Task 0.1 physical layout: this backend `src/` tree lives under `apps/api/src`.
+The backend `src/` tree lives under `apps/api/src`.
 `apps/web` hosts Next.js; `packages/db` supplies the shared Kysely/PostgreSQL
 connection factory, identity/tenancy schema types, Kysely migrations, and development
 seed ([database contract](database.md)); `packages/shared` is reserved for framework-independent
@@ -172,7 +172,7 @@ LedgerFlow favors **recoverable intermediate states over false certainty**; it d
 - Bank confirmed success but local accounting failed → state is `SUCCEEDED` with accounting posting pending, **not** `FAILED`.
 - Bank request timed out → `PENDING_CONFIRMATION` (outcome unknown, reconciliation required), **not** automatically `FAILED`.
 - Operational alerts and the `requiresReview` flag never change financial state automatically; a transfer can be `PENDING_CONFIRMATION` and flagged for review at the same time.
-- A worker that crashes mid-task leaves a recoverable record: the execution attempt is claimed durably before the bank call, and an expired lease makes the work claimable again.
+- A worker that crashes during execution leaves a recoverable record: the execution attempt is claimed durably before the bank call, and an expired lease makes the work claimable again.
 
 ---
 
@@ -225,7 +225,7 @@ flowchart TB
 
 ## 3. Level 2: Container Diagram
 
-Task 0.2 walking skeleton: the Next.js status page calls the API's `/health`
+The Next.js status page calls the API's `/health`
 server-side using `API_URL`; the API executes a table-free `SELECT 1` through
 `packages/db`. HTTP 200 indicates database connectivity; HTTP 503 reports a
 database outage with a generic error. Browser refreshes request fresh status
@@ -350,11 +350,11 @@ Web Frontend, API Application, Worker Process, PostgreSQL, Queue/Job infrastruct
 
 ### 4.1 Authentication & Authorization
 
-- Task 1.2 implements PostgreSQL sessions, Argon2id verification, cookie
+- Authentication uses PostgreSQL sessions, Argon2id verification, cookie
   authentication, CSRF origin checks, and login throttling. See
   [authentication configuration and contracts](authentication.md). Redis remains
   non-authoritative; membership and capability checks are separate.
-- Task 1.3 implements `modules/organizations`: routes validate transport and
+- In `modules/organizations`, routes validate transport and
   authenticate; `OrganizationService` owns capabilities, strict assignment policy,
   Owner retention, and transaction boundaries. `PostgresOrganizationStore` implements
   the module's persistence interfaces with repositories bound to one organization.
@@ -364,7 +364,7 @@ Web Frontend, API Application, Worker Process, PostgreSQL, Queue/Job infrastruct
   Additive migration `003_organization_management` owns audit/idempotency persistence;
   see the [organization contract](features/organization-management.md). No UI or
   financial RBAC is introduced.
-- Task 1.4 adds database-backed tenant capabilities through
+- Database-backed tenant capabilities are defined by migration
   `004_rbac_permissions` (`permissions` and `role_permissions`, using the existing
   membership role enum). The organization application module's
   `RequestCapabilityResolver` consumes a `CapabilitySource` contract implemented
@@ -375,7 +375,7 @@ Web Frontend, API Application, Worker Process, PostgreSQL, Queue/Job infrastruct
   No authorization state is cached across requests or added to sessions.
   Bootstrap, Option A assignment limits, and Last Owner retention remain explicit
   domain invariants independent of configurable access. See the
-  [RBAC database contract](database.md#dynamic-capabilities--task-14).
+  [RBAC database contract](database.md#dynamic-capabilities).
 - **Authentication** answers *who*; **authorization** answers *can this user do this in this organization*.
 - Capability-based checks (`expense:create`, `expense:reverse`, `invoice:issue`, `transfer:approve`, `bank_reconciliation:complete`) rather than role-name comparisons in business logic.
 - Requirements: secure authentication, server-side authorization, secure cookie/token handling, no unnecessary secrets in browser storage, CSRF protection for cookie-based mutations, session expiry/invalidation, audit correlation to the authenticated actor.
@@ -545,7 +545,7 @@ Business UX → Domain Workflows → Financial Policies (RBAC, Approval, Periods
 ```
 
 
-### Implemented tenant repositories and identity UI (Tasks 1.5/1.6)
+### Implemented tenant repositories and identity UI
 
 Infrastructure's `BaseTenantRepository<Resource>` centralizes required tenant
 predicates for typed find/update/delete builders and verifies returned resource

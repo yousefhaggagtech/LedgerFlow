@@ -31,7 +31,7 @@ Allow an authenticated new user to create an organization, establish their membe
 
 This feature belongs to the Identity & Organization context. It covers organization creation, viewing organization settings and members, adding a member, and changing a member's role. Account registration/authentication supplies the authenticated User; it is not implemented by this feature. Organization deletion, member removal, lifecycle administration, and financial configuration workflows are not specified here.
 
-The six sections below use the task's Feature Document Template. Requirements explicitly supplied by the task, including unique memberships and retaining an Owner, supplement docs 01–03. The confirmed Task 1.3 contract in §4 supersedes the earlier conceptual proposals.
+This specification supplements the product overview, domain model, and architecture with membership uniqueness and Owner-retention requirements. The implementation contract in §4 supersedes the earlier conceptual proposals.
 
 ### User Stories
 
@@ -59,7 +59,7 @@ Relationships: a User may belong to multiple Organizations; an Organization has 
 
 Every actor reference in tenant-owned business records identifies a membership in that same organization. Membership reference identity must be stable for audit and historical records; its physical key design belongs to database design.
 
-`OrganizationFinancialSettings` is the existing value object containing `largeTransferThreshold` and `largeReversalThreshold`. It is not a fourth membership entity. Threshold initialization and editing are not defined by this task; no threshold defaults or automatic financial setup are assumed.
+`OrganizationFinancialSettings` is the existing value object containing `largeTransferThreshold` and `largeReversalThreshold`. It is not a fourth membership entity. Threshold initialization and editing are outside this feature's scope; no threshold defaults or automatic financial setup are assumed.
 
 ### Invariants
 
@@ -98,9 +98,9 @@ User roles such as Owner/Admin are authorization groupings; system ledger roles 
 
 ## 4. Technical Specification
 
-### Task 1.1 — Confirmed Persistence Decisions
+### Persistence decisions
 
-Task 1.1 confirms Direct Add (no invitations), Owner-only promotion,
+The persistence model uses Direct Add (no invitations), Owner-only promotion,
 organization status `ACTIVE`/`SUSPENDED`, user and membership status
 `ACTIVE`/`INACTIVE`, and role storage values `OWNER`, `ADMIN`, `ACCOUNTANT`,
 `FINANCE_MEMBER`, `VIEWER`. UUID primary keys use PostgreSQL
@@ -110,10 +110,10 @@ supersede the earlier conceptual status and invitation questions.
 
 The [database contract and verification guide](../database.md) documents the
 implemented schema, tenant-aware membership reference key, migrations, and
-development seed. Task 1.3 adds creation idempotency, authorization, audited
+development seed. Organization management provides creation idempotency, authorization, audited
 commands, and concurrency-safe Owner retention as described below.
 
-### Task 1.3 — Confirmed Implementation Contract
+### Implementation contract
 
 - **Authority (Option A):** Owners may assign all five roles and edit any member,
   including themselves, subject to active-Owner retention. Admins may add/edit
@@ -122,7 +122,7 @@ commands, and concurrency-safe Owner retention as described below.
   other Admins, or Owners, including unchanged-role requests.
 - **Capabilities:** authenticated active users have `org:create`. Active Owner/Admin
   memberships have `org:read`, `member:read`, `member:invite`, and `member:edit`.
-  Other roles receive none of these tenant management capabilities in this task.
+  Other roles receive none of these tenant management capabilities by default.
 - **Direct Add:** `{ userId, role }` identifies an existing active global User by
   UUID; successful additions are immediately ACTIVE. There is no invitation,
   email lookup, account creation, or unrestricted user directory. Duplicate
@@ -178,8 +178,8 @@ commands, and concurrency-safe Owner retention as described below.
 `idempotency_records` currently serves organization creation. Membership addition
 uses uniqueness (duplicates are conflicts); repeated unchanged role assignments
 are no-ops. Before wiring future tenant commands, define their tenant-aware command
-identity and retention/recovery semantics; this task does not claim financial
-command idempotency or lease recovery is implemented.
+identity and retention/recovery semantics. Financial command idempotency and
+lease recovery remain unimplemented.
 
 ### API Contract
 
@@ -225,11 +225,11 @@ Authentication → Active Organization Membership → Capability Authorization
 - Require organization context centrally in tenant-scoped repository interfaces. Load tenant-owned resources by `findById({ organizationId, id })`, never `findById(id)`. All list, count, existence, read, and mutation queries carry the same tenant scope. Loading the Organization root itself uses its ID only after the membership/access check; authenticated creation is the explicit bootstrap exception.
 - For membership changes, use the organization plus target User identifier; never load/update by `userId` alone. Resolve global User identity through a narrowly authorized identity boundary; this does not grant access to that User's other memberships.
 - Use a unique `(organization_id, user_id)` membership constraint and tenant-aware composite foreign keys for references between tenant-owned records. A record's actor reference must include its `organization_id` and identify a membership from the same tenant. The global User reference is not an organization-owned resource.
-- Scope reads and writes in PostgreSQL and enforce referential integrity there; application checks alone are insufficient. Enforce Owner retention under concurrency using a bounded transaction that serializes competing changes for the organization, with database enforcement designed in the later schema task.
+- Scope reads and writes in PostgreSQL and enforce referential integrity there; application checks alone are insufficient. Enforce Owner retention under concurrency using a bounded transaction that serializes competing changes for the organization, with database enforcement defined in the schema design.
 - PostgreSQL RLS remains optional defense in depth. If adopted, establish tenant context safely for each transaction/pooled connection; it supplements authorization. Background work needs deliberate tenant policies. This specification does not require a new RLS architecture.
 - Read current authoritative membership/role state for authorization, or invalidate any authorization cache/claims when it changes. Check permission again on submission even if the UI previously displayed an enabled control.
 
-**Database design — implemented with the approved additive Task 1.3 migration:**
+**Database design — implemented by the additive `003_organization_management` migration:**
 
 | Pillar      | Required treatment in later implementation                                                                                                                                   |
 | ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -255,7 +255,7 @@ These capabilities are implemented for organization management. The complete fin
 
 Accountant, Finance Member, and Viewer receive no membership mutation capability from this feature. Capabilities must be checked in application services rather than scattered Owner/Admin string comparisons. The existing `financial_controls:manage` capability is separate; managing members does not implicitly grant threshold editing, financial approvals, or posting capabilities.
 
-### Task 1.4 — Dynamic Access Authorization
+### Dynamic access authorization
 
 Tenant access now comes from `permissions` and `role_permissions`, seeded by
 `004_rbac_permissions`. The role column uses the existing `membership_role` enum.
@@ -285,8 +285,8 @@ promoting a standard member to OWNER/ADMIN. Capability checks themselves are
 not audited; mutations keep their existing audit behavior.
 
 Role/permission mappings apply globally, while membership and resources remain
-tenant-scoped. Permission administration is trusted database work; this task
-introduces no management UI or grant-writing API. See the [database guide](../database.md#dynamic-capabilities--task-14)
+tenant-scoped. Permission administration is trusted database work; no permission
+management UI or grant-writing API is provided. See the [database guide](../database.md#dynamic-capabilities)
 for schema, deployment, indexes, cache lifecycle, and rollback details.
 
 ### Mutation port preconditions
@@ -319,7 +319,7 @@ with the same lock/invariant/audit protocol.
 Direct Add, strict role authority, status enums, bootstrap retry identity, and the
 transport limits are settled above. Full financial RBAC, organization/member
 lifecycle administration, financial settings initialization/editing, organization-creation UI, signup,
-and idempotency cleanup or future command lease recovery remain outside Task 1.3.
+and idempotency cleanup or future command lease recovery remain outside the membership-management scope.
 
 ### Verification
 
@@ -352,7 +352,7 @@ Do not present automatic accounting setup or posting readiness as a creation out
 
 Use the existing app shell, design tokens, and reusable controls. Reach the page through Settings in the current organization context, and keep the organization name visible so users can identify the tenant being managed. The identity pages use the responsive shell; financial sections remain previews.
 
-Display the organization's name, base currency, accounting timezone, and status, plus the Member Management section when permitted. This task specifies viewing those organization fields, not post-creation editing of currency/timezone, threshold management, ledger mappings, or organization lifecycle actions. Show only sections the caller may read; backend authorization remains authoritative for direct navigation and requests.
+Display the organization's name, base currency, accounting timezone, and status, plus the Member Management section when permitted. This view supports reading those organization fields; post-creation editing of currency/timezone, threshold management, ledger mappings, and organization lifecycle actions are outside its scope. Show only sections the caller may read; backend authorization remains authoritative for direct navigation and requests.
 
 ### Member Management Table
 
@@ -377,7 +377,7 @@ Provide loading placeholders; a clear no-results state; an error state with a re
 Use semantic headings/table markup, associated form labels and field errors, keyboard-operable controls, visible focus, and accessible status announcements. If the form uses a dialog, manage focus on open/close and validation failures. At mobile widths preserve readable organization identity, member identity, role, status, and actions without clipping controls or relying on color alone.
 
 
-## 6. Tasks 1.5 and 1.6 - Tenant Repositories and Identity UI
+## 6. Tenant Repositories and Identity UI
 
 ### Approved organization discovery
 

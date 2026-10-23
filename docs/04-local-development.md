@@ -1,4 +1,4 @@
-# Task 0.1: local development foundation
+# Local development foundation
 
 ## Prerequisites
 
@@ -56,9 +56,9 @@ npm run dev
 ```
 
 `npm run dev` builds dependency packages before starting Next.js and the API
-as parallel persistent tasks. Visit http://localhost:3000 for System Status
+as parallel persistent processes. Visit http://localhost:3000 for System Status
 and http://localhost:4000/health for API/database JSON status. The health
-endpoint executes `SELECT 1` through Kysely. See [Task 0.2](05-walking-skeleton.md)
+endpoint executes `SELECT 1` through Kysely. See [system connectivity checks](05-walking-skeleton.md)
 for configuration and outage/recovery checks.
 RabbitMQ management is at http://localhost:15672 using the credentials in `.env`.
 
@@ -67,7 +67,7 @@ TypeScript runner is needed. Its scripts explicitly load the root `.env`.
 Next.js loads the root `.env` and uses server-only `API_URL`. Redis and RabbitMQ
 clients and the worker entrypoint are deferred. The API creates a database
 pool at startup and uses it for health checks and PostgreSQL sessions.
-Task 1.2 requires `WEB_ORIGIN=http://localhost:3000` in the root `.env` and
+Authentication requires `WEB_ORIGIN=http://localhost:3000` in the root `.env` and
 the latest migrations; see [authentication setup and cURL checks](authentication.md).
 
 ## Manual acceptance checks
@@ -102,7 +102,7 @@ generation, rather than a separate style linter. API health mapping tests run
 with `npm run test --workspace=@ledgerflow/api` after building dependencies.
 Next.js generates ignored `next-env.d.ts`
 and `.next` types automatically. Rebuild shared packages after editing them;
-they have no watch tasks at this stage.
+they have no watch mode at this stage.
 
 To stop infrastructure while keeping local data:
 
@@ -122,7 +122,7 @@ docker compose stop
   infrastructure, not a production deployment or backup strategy.
 - `createDatabase<Database>(url)` validates the URL and creates a bounded,
   lazy connection pool. Call once per process and await `db.destroy()` on
-  shutdown. Task 1.1 adds identity/tenancy schema types, migrations, and a
+  shutdown. The database package provides identity/tenancy schema types, migrations, and a
   development seed; see [database setup and verification](database.md).
   Run `npm run migrate --workspace=@ledgerflow/db` before seeding.
   Tenant-scoped repositories and authorization must precede business queries.
@@ -138,6 +138,6 @@ docker compose stop
 ## Verification status
 
 Installation, lint, type-check, build, Docker startup, and runtime smoke tests
-were deliberately not executed, per the environment instruction for Task 0.1.
+were not executed during the initial scaffold setup.
 A lockfile was subsequently supplied and committed. Acceptance remains pending
 the manual checks above; no successful runtime verification is claimed.

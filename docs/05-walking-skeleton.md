@@ -1,4 +1,4 @@
-# Task 0.2: walking skeleton connection
+# System connectivity and health checks
 
 The status page follows Web (Next.js server) → API → PostgreSQL. No tables,
 schema, migrations, or new endpoints are introduced. Redis and RabbitMQ are
@@ -29,7 +29,7 @@ npm run dev
 ```
 
 Open http://localhost:3000. Expect `API: UP` and `DB: UP` in the system status
-card within the app shell. Task 0.3 uses neutral status badges; green, red,
+card within the app shell. The app shell uses neutral status badges; green, red,
 and amber are reserved for financial states. See [design tokens](design-tokens.md).
 The page refreshes every five seconds without a full browser reload; requests
 are uncached. Allow additional time for connection/query timeouts during an
@@ -79,8 +79,7 @@ npm run test --workspace=@ledgerflow/api
 
 The API tests use Node's built-in test runner and injected success/failure
 checks without external services. They cover status mapping and error
-redaction. Docker/browser acceptance checks remain manual. No dependencies
-were added, so no lockfile update is needed for this task.
+redaction. Docker/browser acceptance checks remain manual.
 
 ## Verification status
 

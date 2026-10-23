@@ -173,7 +173,7 @@ Roles are permission groupings. Application code authorizes capabilities (e.g. `
 | Owner | Visibility into cash, revenue, expenses, receivables, payables, performance. | Full organization access, financial controls, approvals. |
 | Admin | Manage organization configuration, team access, financial controls, operational settings. | Administrative capabilities; may manage `financial_controls`. |
 | Accountant | Review records, perform accounting-sensitive operations and corrections, maintain integrity. | Reversals, period close, reconciliation, review. |
-| Finance Member | Day-to-day finance tasks: expenses, bills, payments, invoices, transfers. | Operational create/pay/record capabilities per permissions. |
+| Finance Member | Day-to-day finance operations: expenses, bills, payments, invoices, transfers. | Operational create/pay/record capabilities per permissions. |
 | Viewer | Consume dashboards and financial information. | Read-only; cannot modify financial state. |
 
 Example capabilities: `expense:create`, `expense:reverse`, `vendor_bill:create`, `vendor_bill:pay`, `invoice:create`, `invoice:issue`, `invoice:record_payment`, `transfer:create`, `transfer:approve`, `financial_controls:manage`, `accounting_period:close`, `bank_reconciliation:complete`.
