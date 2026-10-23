@@ -82,9 +82,9 @@ export interface IdempotencyRecordsTable {
   command_type: string;
   idempotency_key: string;
   request_hash: string;
-  response_status: number;
-  response_snapshot: JsonObjectColumn;
-  status: Generated<"COMPLETED">;
+  response_status: number | null;
+  response_snapshot: JsonObjectColumn | null;
+  status: Generated<"COMPLETED" | "EXPIRED">;
   created_at: Generated<Date>;
   expires_at: Date;
 }

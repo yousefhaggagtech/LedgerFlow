@@ -1,4 +1,4 @@
-import { createDatabaseFromEnvironment } from "./index.js";
+import { createMigrationDatabaseFromEnvironment } from "./migration-database.js";
 import type { Database } from "./schema.js";
 import { seedDevelopment } from "./seeds/development.js";
 
@@ -6,7 +6,7 @@ if (process.env.NODE_ENV === "production") {
   throw new Error("Development seed cannot run in production.");
 }
 
-const db = createDatabaseFromEnvironment<Database>();
+const db = createMigrationDatabaseFromEnvironment<Database>();
 try {
   await seedDevelopment(db);
   process.stdout.write("Development organization, user, and Owner membership created.\n");

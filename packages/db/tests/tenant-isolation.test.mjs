@@ -57,7 +57,7 @@ test("tenant relationship migration preserves history and enforces composite ref
       const upgraded = await db.selectFrom("audit_events").selectAll().where("id", "=", oldAudit.id).executeTakeFirstOrThrow();
       assert.deepEqual(upgraded, { ...oldAudit, target_membership_id: a.member.id });
       assert.deepEqual(await db.selectFrom("idempotency_records").selectAll().where("id", "=", oldRecord.id).executeTakeFirstOrThrow(), oldRecord);
-      assert.equal((await migrator.migrateDown()).error, undefined);
+      assert.equal((await migrator.migrateTo("004_rbac_permissions")).error, undefined);
       assert.deepEqual(await db.selectFrom("audit_events").selectAll().where("id", "=", oldAudit.id).executeTakeFirstOrThrow(), oldAudit);
       assert.deepEqual(await db.selectFrom("idempotency_records").selectAll().where("id", "=", oldRecord.id).executeTakeFirstOrThrow(), oldRecord);
       assert.equal((await migrator.migrateToLatest()).error, undefined);

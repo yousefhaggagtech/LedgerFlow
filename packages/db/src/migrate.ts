@@ -1,8 +1,8 @@
-import { createDatabaseFromEnvironment } from "./index.js";
+import { createMigrationDatabaseFromEnvironment } from "./migration-database.js";
 import { createMigrator } from "./migrator.js";
 import type { Database } from "./schema.js";
 
-const db = createDatabaseFromEnvironment<Database>();
+const db = createMigrationDatabaseFromEnvironment<Database>();
 try {
   const { error, results } = await createMigrator(db).migrateToLatest();
   for (const result of results ?? []) {
