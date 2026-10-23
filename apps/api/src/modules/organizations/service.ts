@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import type { MembershipRole } from "@ledgerflow/shared";
-import { requireAssignment } from "./policy.ts";
-import { RequestCapabilityResolver, requireCapability, type Capability } from "./capabilities.ts";
+import { requireAssignment, requireVisibleOrganization } from "./policy.ts";
+import { RequestCapabilityResolver, requireActiveMembership, requireCapability, type AuthorizedMembership, type Capability } from "./capabilities.ts";
 import { isCreationResult } from "./validation.ts";
 import { membershipDto, OrganizationError, type Actor, type CreateOrganizationInput, type CreationResult,
   type OrganizationRepository, type OrganizationStore, type OrganizationTransaction, type PageInput,
@@ -10,16 +10,17 @@ import { membershipDto, OrganizationError, type Actor, type CreateOrganizationIn
 const CREATION_RETENTION_MS = 24 * 60 * 60 * 1_000;
 
 async function tenantAccess(transaction: OrganizationTransaction, organizationId: string, userId: string,
-  capability: Capability, lock: "read" | "write") {
+  capability: Capability | undefined, lock: "read" | "write") {
   const resolver = new RequestCapabilityResolver(transaction);
-  // Check visibility before loading the root, then recheck after acquiring its lock.
-  requireCapability(capability, await resolver.resolve(organizationId, userId));
   const repository = await transaction.forOrganization(organizationId);
-  const organization = await repository.organization(lock);
-  if (!organization) throw new OrganizationError("RESOURCE_NOT_FOUND", "Organization not found.");
+  // Check visibility before loading the root, then recheck after acquiring its lock.
+  const authorize = (member: AuthorizedMembership | undefined) => capability
+    ? requireCapability(capability, member) : requireActiveMembership(member);
+  authorize(await resolver.resolve(organizationId, userId));
+  const organization = requireVisibleOrganization(await repository.organization(lock));
   // Waiting for a lock may span a role change or grant revocation: discard the earlier snapshot.
   resolver.invalidate(organizationId, userId);
-  const actor = requireCapability(capability, await resolver.resolve(organizationId, userId));
+  const actor = authorize(await resolver.resolve(organizationId, userId));
   return { repository, organization, actor };
 }
 
@@ -42,11 +43,11 @@ export class OrganizationService {
       const existing = await transaction.findCreation(key);
       if (existing) {
         if (existing.requestHash !== requestHash) throw new OrganizationError("BUSINESS_CONFLICT", "Idempotency key was used with a different request.");
-        if (existing.expiresAt <= this.now()) throw new OrganizationError("BUSINESS_CONFLICT", "Idempotency key has expired. Check the existing organization before retrying.");
+        if (existing.status === "EXPIRED" || existing.expiresAt <= this.now()) throw new OrganizationError("BUSINESS_CONFLICT", "Idempotency key has expired. Check the existing organization before retrying.");
         const repository = await transaction.forOrganization(existing.organizationId);
         const member = await repository.findMembership(actor.userId);
         if (!member || member.status !== "ACTIVE") throw new OrganizationError("RESOURCE_NOT_FOUND", "Organization not found.");
-        await repository.organization("read");
+        requireVisibleOrganization(await repository.organization("read"));
         const current = await repository.findMembership(actor.userId);
         if (!current || current.status !== "ACTIVE") throw new OrganizationError("RESOURCE_NOT_FOUND", "Organization not found.");
         if (!isCreationResult(existing.response)) throw new Error("Invalid stored creation response.");
@@ -64,6 +65,14 @@ export class OrganizationService {
       await transaction.saveCreation(key, requestHash, result,
         new Date(this.now().getTime() + CREATION_RETENTION_MS));
       return result;
+    });
+  }
+
+  access(organizationId: string, userId: string) {
+    return this.store.transaction({ userId }, async (transaction) => {
+      // Hints must remain readable after a grant is revoked; membership is the visibility boundary.
+      const { actor } = await tenantAccess(transaction, organizationId, userId, undefined, "read");
+      return { membership: membershipDto(actor), capabilities: [...actor.capabilities] };
     });
   }
 

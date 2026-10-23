@@ -60,6 +60,7 @@ export interface OrganizationRepository {
 }
 
 export interface CreationRecord {
+  status: "COMPLETED" | "EXPIRED";
   requestHash: string;
   organizationId: string;
   expiresAt: Date;

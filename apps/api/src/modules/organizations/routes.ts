@@ -26,6 +26,9 @@ export function createOrganizationRouter(service: OrganizationService, store: Au
   router.get("/:id", identifyRoute("/organizations/:id"), async (request, response) => {
     response.json(await service.get(identifier(request.params.id), actor(request, response).userId));
   });
+  router.get("/:id/access", identifyRoute("/organizations/:id/access"), async (request, response) => {
+    response.json(await service.access(identifier(request.params.id), actor(request, response).userId));
+  });
   router.get("/:id/members", identifyRoute("/organizations/:id/members"), async (request, response) => {
     const organizationId = identifier(request.params.id);
     response.json(await service.members(organizationId, actor(request, response).userId, pageInput(request.query, organizationId)));

@@ -30,6 +30,7 @@ export function createAuthRouter(store: AuthStore, config: AuthConfig, executeLo
   router.use((_request, response, next) => { response.set("Cache-Control", "no-store"); next(); });
   const limit = rateLimit({
     windowMs: LOGIN_WINDOW_MS, limit: LOGIN_ATTEMPT_LIMIT,
+    skipSuccessfulRequests: true,
     standardHeaders: "draft-8", legacyHeaders: false,
     message: { error: "Too many login attempts. Try again later." }
   });

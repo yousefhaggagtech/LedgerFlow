@@ -37,8 +37,13 @@ export class RequestCapabilityResolver {
   }
 }
 
-export function requireCapability(capability: Capability, member: AuthorizedMembership | undefined): AuthorizedMembership {
+export function requireActiveMembership(member: AuthorizedMembership | undefined): AuthorizedMembership {
   if (!member || member.status !== "ACTIVE") throw new OrganizationError("RESOURCE_NOT_FOUND", "Organization not found.");
-  if (!member.capabilities.includes(capability)) throw new OrganizationError("PERMISSION_DENIED", "Permission denied.");
   return member;
+}
+
+export function requireCapability(capability: Capability, member: AuthorizedMembership | undefined): AuthorizedMembership {
+  const active = requireActiveMembership(member);
+  if (!active.capabilities.includes(capability)) throw new OrganizationError("PERMISSION_DENIED", "Permission denied.");
+  return active;
 }

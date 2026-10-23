@@ -15,6 +15,7 @@ import { correlateRequest, createErrorHandler, identifyRoute, logRequestFailure 
 import { createLogin } from "./modules/auth/login.ts";
 import { verifyPassword } from "./modules/auth/password.ts";
 import { issueSessionCredential } from "./infrastructure/session-credentials.ts";
+import type { TrustProxy } from "./presentation/proxy-config.ts";
 
 interface AppDependencies {
   authStore: AuthStore;
@@ -23,13 +24,14 @@ interface AppDependencies {
   now?: () => Date;
   organizationStore?: OrganizationStore;
   logger?: StructuredLogger;
+  trustProxy?: TrustProxy;
 }
 
-export function createApp({ authStore, authConfig, checkDatabase, now, organizationStore, logger = defaultLogger }: AppDependencies) {
+export function createApp({ authStore, authConfig, checkDatabase, now, organizationStore, logger = defaultLogger, trustProxy = false }: AppDependencies) {
   const app = express();
   app.disable("x-powered-by");
   app.use(correlateRequest);
-  // Forwarded IPs are deliberately untrusted until a deployment defines its proxy boundary.
+  app.set("trust proxy", trustProxy);
   app.use(helmet(authConfig.production ? {} : { strictTransportSecurity: false }));
   app.use(cors({ credentials: true,
     origin: (origin, callback) => callback(null, origin === authConfig.webOrigin),
@@ -75,6 +77,7 @@ export function createApp({ authStore, authConfig, checkDatabase, now, organizat
   if (organizationStore) {
     app.use("/organizations", createOrganizationRouter(new OrganizationService(organizationStore, now), authStore, authConfig, now));
   }
+  app.use((_request, response) => { response.status(404).json({ error: "Route not found." }); });
   app.use(createErrorHandler(logger));
   return app;
 }

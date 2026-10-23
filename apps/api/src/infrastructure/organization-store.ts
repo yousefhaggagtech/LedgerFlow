@@ -2,6 +2,7 @@ import type { Kysely, Transaction } from "kysely";
 import { BaseTenantRepository, tenantScope } from "./tenant-repository.ts";
 import type { Database } from "@ledgerflow/db";
 import type { MembershipRole } from "@ledgerflow/shared";
+import { ACTIVE_ORGANIZATION_STATUS } from "../modules/organizations/policy.ts";
 import { OrganizationError, type AuditChange, type CreateOrganizationInput, type CreationResult,
   type StoredMembership, type AuthenticatedContext, type OrganizationRepository, type OrganizationStore, type OrganizationTransaction, type PageInput } from "../modules/organizations/types.ts";
 
@@ -118,11 +119,12 @@ class PostgresOrganizationTransaction implements OrganizationTransaction {
 
   async forOrganization(organizationId: string): Promise<OrganizationRepository> {
     // Bootstrap is restricted to roots created here, after locking this user.
-    // Every existing tenant must prove an active membership before repository access.
+    // Every existing tenant must prove active membership and business visibility.
     if (!this.createdOrganizations.has(organizationId)) {
-      const member = await this.trx.selectFrom("memberships").select("organization_id")
-        .where(tenantScope(organizationId, "organization_id")).where("user_id", "=", this.userId)
-        .where("status", "=", "ACTIVE").executeTakeFirst();
+      const member = await this.trx.selectFrom("memberships as m").innerJoin("organizations as o", "o.id", "m.organization_id")
+        .select("m.organization_id")
+        .where(tenantScope(organizationId, "m.organization_id")).where("m.user_id", "=", this.userId)
+        .where("m.status", "=", "ACTIVE").where("o.status", "=", ACTIVE_ORGANIZATION_STATUS).executeTakeFirst();
       if (!member) throw new OrganizationError("RESOURCE_NOT_FOUND", "Organization not found.");
       organizationId = member.organization_id;
     }
@@ -152,7 +154,7 @@ class PostgresOrganizationTransaction implements OrganizationTransaction {
 
   findCreation(key: string) {
     return this.trx.selectFrom("idempotency_records")
-      .select(["request_hash as requestHash", "organization_id as organizationId", "expires_at as expiresAt", "response_snapshot as response"])
+      .select(["status", "request_hash as requestHash", "organization_id as organizationId", "expires_at as expiresAt", "response_snapshot as response"])
       .where("user_id", "=", this.userId).where("command_type", "=", CREATION_COMMAND).where("idempotency_key", "=", key)
       .executeTakeFirst();
   }
@@ -164,6 +166,16 @@ class PostgresOrganizationTransaction implements OrganizationTransaction {
       command_type: CREATION_COMMAND, idempotency_key: key, request_hash: hash,
       response_status: 201, response_snapshot: JSON.stringify(result), expires_at: expiresAt }).execute();
   }
+}
+
+export const CREATION_CLEANUP_BATCH_SIZE = 1_000;
+
+// Maintenance-only writer: preserve command identity/tenant ownership and release payloads, never keys.
+export async function expireCreationSnapshots(db: Kysely<Database>, now: Date): Promise<void> {
+  await db.updateTable("idempotency_records").set({ status: "EXPIRED", response_status: null, response_snapshot: null })
+    .where("id", "in", db.selectFrom("idempotency_records").select("id")
+      .where("status", "=", "COMPLETED").where("expires_at", "<=", now)
+      .orderBy("expires_at").orderBy("id").limit(CREATION_CLEANUP_BATCH_SIZE).forUpdate().skipLocked()).execute();
 }
 
 export class PostgresOrganizationStore implements OrganizationStore {

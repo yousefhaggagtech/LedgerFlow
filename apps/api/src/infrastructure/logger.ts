@@ -2,11 +2,11 @@ export const ERROR_CATEGORIES = ["VALIDATION_FAILURE", "AUTHENTICATION_FAILURE",
   "RESOURCE_NOT_FOUND", "BUSINESS_CONFLICT", "DATABASE_CONFLICT", "DATABASE_FAILURE", "INTERNAL_FAILURE"] as const;
 export type ErrorCategory = typeof ERROR_CATEGORIES[number];
 export const SAFE_ROUTES = ["unmatched", "organizations_authentication", "/health", "/auth/login", "/auth/logout", "/auth/me",
-  "/organizations", "/organizations/:id", "/organizations/:id/members", "/organizations/:id/members/:userId"] as const;
+  "/organizations", "/organizations/:id", "/organizations/:id/access", "/organizations/:id/members", "/organizations/:id/members/:userId"] as const;
 export type SafeRoute = typeof SAFE_ROUTES[number];
 
 const LEVELS = {
-  api_request_failed: "error", password_hash_verification_failed: "warn", session_cleanup_failed: "error",
+  api_request_failed: "error", password_hash_verification_failed: "warn", session_cleanup_failed: "error", idempotency_cleanup_failed: "error",
   api_start_failed: "error", api_shutdown_failed: "error", database_shutdown_failed: "error",
   api_started: "info", api_stopped: "info"
 } as const;

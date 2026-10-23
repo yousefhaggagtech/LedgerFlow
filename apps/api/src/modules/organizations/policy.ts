@@ -1,5 +1,15 @@
 import type { MembershipRole } from "@ledgerflow/shared";
-import { OrganizationError, type StoredMembership } from "./types.ts";
+import { OrganizationError, type Organization, type StoredMembership } from "./types.ts";
+
+export const ACTIVE_ORGANIZATION_STATUS = "ACTIVE";
+
+// Business visibility gate; a future privileged platform path must opt out deliberately.
+export function requireVisibleOrganization(organization: Organization | undefined): Organization {
+  if (!organization || organization.status !== ACTIVE_ORGANIZATION_STATUS) {
+    throw new OrganizationError("RESOURCE_NOT_FOUND", "Organization not found.");
+  }
+  return organization;
+}
 
 // Structural assignment limits are domain invariants, independent of capability grants.
 const STANDARD_ROLES: readonly MembershipRole[] = ["ACCOUNTANT", "FINANCE_MEMBER", "VIEWER"];
